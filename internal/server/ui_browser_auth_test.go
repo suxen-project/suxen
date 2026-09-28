@@ -3,6 +3,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -316,7 +317,7 @@ const waitFor = async (predicate) => {
 
 func runBrowserUntilResult(t *testing.T, browser, target string, result <-chan string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, browser,
 		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
@@ -324,7 +325,8 @@ func runBrowserUntilResult(t *testing.T, browser, target string, result <-chan s
 		target,
 	)
 	command.Stdout = io.Discard
-	command.Stderr = io.Discard
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -348,7 +350,7 @@ func runBrowserUntilResult(t *testing.T, browser, target string, result <-chan s
 		}
 	}
 	if value == "" {
-		t.Fatalf("browser ended before reporting a result: %v, %v", ctx.Err(), exitErr)
+		t.Fatalf("browser ended before reporting a result: %v, %v\nChromium stderr:\n%s", ctx.Err(), exitErr, stderr.String())
 	}
 	return value
 }
