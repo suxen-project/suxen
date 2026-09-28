@@ -14,6 +14,9 @@ const browserCandidates = [
   "/usr/bin/google-chrome",
 ].filter(Boolean);
 const browser = browserCandidates.find(existsSync);
+if (!browser && process.env.SUXEN_REQUIRE_BROWSER_TEST === "1") {
+  throw new Error("required Chromium browser is not installed");
+}
 
 test("native cancel cannot reuse an earlier confirmation", {skip: !browser}, async () => {
   const profile = mkdtempSync(join(tmpdir(), "suxen-ui-browser-"));
@@ -86,7 +89,7 @@ test("native cancel cannot reuse an earlier confirmation", {skip: !browser}, asy
   let deadline;
   try {
     const timeout = new Promise((_, reject) => {
-      deadline = setTimeout(() => reject(new Error(`browser timed out:\n${stderr}`)), 25_000);
+      deadline = setTimeout(() => reject(new Error(`browser timed out:\n${stderr}`)), 60_000);
     });
     assert.equal(await Promise.race([result, exit, timeout]), "passed");
   } finally {

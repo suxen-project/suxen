@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-noui build-noplugins test test-ui test-noui test-race-storage test-browser test-interop test-examples check check-core check-race-partition check-example check-chart check-release-scripts print-contract-matrix clean
+.PHONY: all build build-server build-noui build-noplugins test test-ui test-ui-unit test-ui-browser test-noui test-race-storage test-browser test-interop test-examples check check-core check-race-partition check-example check-chart check-release-scripts print-contract-matrix clean
 
 VERSION ?= 1.0.0-rc.1
 LDFLAGS := -s -w -X github.com/suxen-project/suxen/internal/server.Version=$(VERSION)
@@ -58,6 +58,12 @@ test:
 test-ui:
 	node --test internal/server/ui_testdata/*.test.mjs
 
+test-ui-unit:
+	node --test $(filter-out %.browser.test.mjs,$(wildcard internal/server/ui_testdata/*.test.mjs))
+
+test-ui-browser:
+	node --test internal/server/ui_testdata/*.browser.test.mjs
+
 test-noui:
 	go test -tags=noui -run '$(NOUI_RUN)' ./...
 
@@ -98,7 +104,7 @@ check-core:
 	go vet -tags=suxen_integration ./...
 	$(MAKE) check-race-partition
 	go test -race $(CORE_RACE_PACKAGES)
-	$(MAKE) test-ui
+	$(MAKE) $(if $(filter 1,$(SUXEN_CI_UI_BROWSER_SPLIT)),test-ui-unit,test-ui)
 	$(MAKE) test-noui
 
 # Prove every storage race package still exists so a rename cannot silently drop
