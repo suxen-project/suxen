@@ -1,4 +1,4 @@
-.PHONY: all build build-server build-noui build-noplugins test test-ui test-noui test-race-storage test-interop test-examples check check-core check-race-partition check-example check-chart check-release-scripts print-contract-matrix clean
+.PHONY: all build build-server build-noui build-noplugins test test-ui test-noui test-race-storage test-browser test-interop test-examples check check-core check-race-partition check-example check-chart check-release-scripts print-contract-matrix clean
 
 VERSION ?= 1.0.0-rc.1
 LDFLAGS := -s -w -X github.com/suxen-project/suxen/internal/server.Version=$(VERSION)
@@ -66,8 +66,16 @@ test-noui:
 # target builds them and races the storage packages against the CI-provided
 # PostgreSQL, S3, and GCS services. Each integration test skips when its own
 # SUXEN_TEST_* service is not configured.
+# The browser tests run after CI stops its backend service containers. Chromium
+# can be killed by the memory pressure of race instrumentation plus the services.
+# The remaining server and storage tests still run under the race detector.
+BROWSER_TESTS := ^(TestAuthenticatedAdministrationUIBrowserCRUD|TestAdministrationUIBrowserCookieCSRF|TestAdministrationUIBrowserOIDCCallbackAndLogout|TestAdministrationUIBrowserExactPolicyNumbers|TestAdministrationUIRendersInBrowser|TestArtifactScriptsCannotExecuteInAdministrationOrigin)$$
+STORAGE_BROWSER_SKIP := $(if $(filter 1,$(SUXEN_CI_BROWSER_SPLIT)),-skip='$(BROWSER_TESTS)',)
 test-race-storage:
-	go test -race -count=1 -tags=suxen_integration $(STORAGE_RACE_PACKAGES)
+	go test -race -p 1 -count=1 -tags=suxen_integration $(STORAGE_BROWSER_SKIP) $(STORAGE_RACE_PACKAGES)
+
+test-browser:
+	go test -parallel 1 -count=1 -run '$(BROWSER_TESTS)' ./internal/server
 
 test-interop:
 	test/e2e/run.sh

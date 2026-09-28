@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import {spawnSync} from "node:child_process";
-import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from "node:fs";
+import {spawn} from "node:child_process";
+import {existsSync, mkdtempSync, readFileSync, rmSync} from "node:fs";
+import {createServer} from "node:http";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
-import {fileURLToPath, pathToFileURL} from "node:url";
+import {fileURLToPath} from "node:url";
 import test from "node:test";
 
 const browserCandidates = [
@@ -14,12 +15,11 @@ const browserCandidates = [
 ].filter(Boolean);
 const browser = browserCandidates.find(existsSync);
 
-test("native cancel cannot reuse an earlier confirmation", {skip: !browser}, (context) => {
+test("native cancel cannot reuse an earlier confirmation", {skip: !browser}, async () => {
   const profile = mkdtempSync(join(tmpdir(), "suxen-ui-browser-"));
   const implementationPath = fileURLToPath(new URL("../ui/dialog.js", import.meta.url));
   const implementation = readFileSync(implementationPath, "utf8").replace("export function", "function");
-  const fixture = join(profile, "confirm-dialog.html");
-  writeFileSync(fixture, `<!doctype html>
+  const fixture = `<!doctype html>
     <body data-result="pending">
       <dialog id="confirm-dialog">
         <form method="dialog">
@@ -42,34 +42,58 @@ test("native cancel cannot reuse an earlier confirmation", {skip: !browser}, (co
           if (await secondDecision) {
             destructiveCalls += 1;
           }
-          document.body.dataset.result = firstConfirmed && destructiveCalls === 0
-            ? "passed"
-            : "failed";
+          const status = firstConfirmed && destructiveCalls === 0 ? "passed" : "failed";
+          fetch("/result?status=" + status);
         })().catch((error) => {
-          document.body.dataset.result = "failed";
-          document.body.dataset.error = error.message;
+          fetch("/result?status=" + encodeURIComponent(error.message));
         });
       </script>
-    </body>`, "utf8");
-  try {
-    const result = spawnSync(browser, [
-      "--headless=new",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--disable-dev-shm-usage",
-      "--allow-file-access-from-files",
-      "--virtual-time-budget=2000",
-      `--user-data-dir=${profile}`,
-      "--dump-dom",
-      pathToFileURL(fixture).href,
-    ], {encoding: "utf8"});
-    if (result.status === null && result.stderr.includes("Operation not permitted")) {
-      context.skip("Chromium cannot start in this process sandbox.");
+    </body>`;
+
+  let resolveResult;
+  const result = new Promise((resolve) => { resolveResult = resolve; });
+  const server = createServer((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    if (url.pathname === "/result") {
+      resolveResult(url.searchParams.get("status"));
+      response.writeHead(204).end();
       return;
     }
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /data-result="passed"/);
+    response.writeHead(200, {"Content-Type": "text/html; charset=utf-8"}).end(fixture);
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  const child = spawn(browser, [
+    "--headless=new",
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--remote-debugging-port=0",
+    `--user-data-dir=${profile}`,
+    `http://127.0.0.1:${address.port}/`,
+  ], {stdio: ["ignore", "ignore", "pipe"]});
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr = (stderr + chunk).slice(-8192); });
+  const exit = new Promise((_, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => reject(new Error(
+      `browser exited before reporting: ${code ?? signal}\n${stderr}`,
+    )));
+  });
+  let deadline;
+  try {
+    const timeout = new Promise((_, reject) => {
+      deadline = setTimeout(() => reject(new Error(`browser timed out:\n${stderr}`)), 25_000);
+    });
+    assert.equal(await Promise.race([result, exit, timeout]), "passed");
   } finally {
+    clearTimeout(deadline);
+    child.kill("SIGKILL");
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
     rmSync(profile, {recursive: true, force: true});
   }
 });

@@ -126,7 +126,7 @@ const button = (label) => [...document.querySelectorAll("#app-view button")]
 func TestAdministrationUIBrowserCookieCSRF(t *testing.T) {
 	browser := chromiumExecutable(t)
 	fixture := newServerFixture(t)
-	statuses := make(chan int, 1)
+	statuses := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/csrf-seed" {
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -147,7 +147,7 @@ fetch("/auth/oidc/test/logout", {method: "POST"}).then((response) => {
 			recorded := httptest.NewRecorder()
 			fixture.Handler.ServeHTTP(recorded, r)
 			select {
-			case statuses <- recorded.Code:
+			case statuses <- fmt.Sprint(recorded.Code):
 			default:
 			}
 			for name, values := range recorded.Header() {
@@ -173,24 +173,8 @@ fetch(%q, {method: "POST", mode: "no-cors", credentials: "include"})
 	// A query parameter is read by the seed page, avoiding an inline script in
 	// the UI origin while preserving the real browser's automatic Origin header.
 	seed := url.QueryEscape(crossOrigin.URL)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, browser,
-		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-		"--virtual-time-budget=3000", "--user-data-dir="+filepath.Join(t.TempDir(), "profile"),
-		"--dump-dom", server.URL+"/csrf-seed?next="+seed,
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run browser: %v\n%s", err, output)
-	}
-	select {
-	case status := <-statuses:
-		if status != http.StatusForbidden {
-			t.Fatalf("cross-origin cookie mutation status = %d, want 403", status)
-		}
-	default:
-		t.Fatalf("browser did not send cross-origin cookie mutation: %s", output)
+	if got := runBrowserUntilResult(t, browser, server.URL+"/csrf-seed?next="+seed, statuses); got != "403" {
+		t.Fatalf("cross-origin cookie mutation status = %s, want 403", got)
 	}
 }
 

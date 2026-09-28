@@ -130,6 +130,11 @@ jobs:
           cache: true
       - name: Install Bats
         run: sudo apt-get update && sudo apt-get install --yes bats
+      - name: Build example binaries before the startup deadline
+        run: |
+          mkdir -p examples/.bin
+          (cd examples/plugin-memblob && go build -o ../.bin/suxen-mem ./cmd/suxen-custom)
+          go build -o examples/.bin/suxenctl ./cmd/suxenctl
       - name: Run executable examples
         run: |
           # The canonical GitHub runner and release gate provide the network and
@@ -262,6 +267,7 @@ jobs:
           AWS_ACCESS_KEY_ID: minioadmin
           AWS_SECRET_ACCESS_KEY: minioadmin
           AWS_REGION: us-east-1
+          SUXEN_CI_BROWSER_SPLIT: "1"
         run: make test-race-storage
       - name: Show backend logs after a failure
         if: ${{ failure() }}
@@ -275,6 +281,10 @@ jobs:
           docker stop "${POSTGRES_CONTAINER_ID}" "${MINIO_CONTAINER_ID}" \
             "${GCS_CONTAINER_ID}" >/dev/null 2>&1 || true
           docker image rm "${MINIO_TEST_IMAGE}" >/dev/null 2>&1 || true
+      - name: Exercise browser security and administration contracts
+        env:
+          SUXEN_REQUIRE_BROWSER_TEST: "1"
+        run: make test-browser
 
   vulnerability-scan:
     runs-on: ubuntu-latest
