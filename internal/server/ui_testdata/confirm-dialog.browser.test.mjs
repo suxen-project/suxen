@@ -62,13 +62,16 @@ test("native cancel cannot reuse an earlier confirmation", {skip: !browser}, (co
       `--user-data-dir=${profile}`,
       "--dump-dom",
       pathToFileURL(fixture).href,
-    ], {encoding: "utf8"});
+    ], {encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL"});
     if (result.status === null && result.stderr.includes("Operation not permitted")) {
       context.skip("Chromium cannot start in this process sandbox.");
       return;
     }
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.stdout, /data-result="passed"/);
+    // Chromium can render --dump-dom and then keep a background process alive.
+    // Require the observed browser result, while bounding the process lifetime.
+    if (result.error && result.error.code !== "ETIMEDOUT") throw result.error;
+    if (result.error?.code !== "ETIMEDOUT") assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /data-result="passed"/, result.stderr);
   } finally {
     rmSync(profile, {recursive: true, force: true});
   }
