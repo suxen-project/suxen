@@ -1,0 +1,35 @@
+apiVersion: suxen.io/v1
+resources:
+  # Cache the public npm registry.
+  - kind: repository
+    name: npm-proxy
+    spec:
+      format: npm
+      type: proxy
+      upstream: https://registry.npmjs.org
+
+  # Accept internal publishes (npm publish).
+  - kind: repository
+    name: npm-hosted
+    spec:
+      format: npm
+      type: hosted
+
+  # One registry URL serving internal packages and cached public ones.
+  - kind: repository
+    name: npm
+    spec:
+      format: npm
+      type: group
+      members:
+        - npm-hosted
+        - npm-proxy
+
+  # Attach this role to a scoped user (see the README) so CI can publish without
+  # the admin token.
+  - kind: role
+    name: npm-publisher
+    spec:
+      description: Publish to the hosted npm registry
+      privileges:
+        - repository:npm-hosted:write

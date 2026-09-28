@@ -1,0 +1,26 @@
+apiVersion: suxen.io/v1
+resources:
+  # Cache the public module proxy.
+  - kind: repository
+    name: go-proxy
+    spec:
+      format: go
+      type: proxy
+      upstream: https://proxy.golang.org
+
+  # Host internal modules published as .info/.mod/.zip uploads.
+  - kind: repository
+    name: go-hosted
+    spec:
+      format: go
+      type: hosted
+
+  # One GOPROXY that serves internal modules and cached public ones.
+  - kind: repository
+    name: go
+    spec:
+      format: go
+      type: group
+      members:
+        - go-hosted
+        - go-proxy

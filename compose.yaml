@@ -1,0 +1,33 @@
+services:
+  suxen:
+    build:
+      context: .
+      args:
+        SUXEN_BUILD_TAGS: ${SUXEN_BUILD_TAGS:-}
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      SUXEN_LISTEN: ":8080"
+      SUXEN_BOOTSTRAP_USER: ${SUXEN_BOOTSTRAP_USER:-admin}
+      SUXEN_BOOTSTRAP_PASSWORD: ${SUXEN_BOOTSTRAP_PASSWORD:-}
+      SUXEN_BOOTSTRAP_TOKEN: ${SUXEN_BOOTSTRAP_TOKEN:-}
+      SUXEN_CLUSTER: ${SUXEN_CLUSTER:-}
+      SUXEN_CLEANUP_INTERVAL: ${SUXEN_CLEANUP_INTERVAL:-1h}
+      SUXEN_PROXY_MANIFEST_TTL: ${SUXEN_PROXY_MANIFEST_TTL:-5m}
+      SUXEN_OUTBOUND_TIMEOUT: ${SUXEN_OUTBOUND_TIMEOUT:-30s}
+      SUXEN_OUTBOUND_ALLOWED_CIDRS: ${SUXEN_OUTBOUND_ALLOWED_CIDRS:-}
+      SUXEN_OUTBOUND_ALLOWED_HOSTS: ${SUXEN_OUTBOUND_ALLOWED_HOSTS:-}
+      SUXEN_PROXY_TOKEN_REALM_HOSTS: ${SUXEN_PROXY_TOKEN_REALM_HOSTS:-}
+      SUXEN_UI_ENABLED: ${SUXEN_UI_ENABLED:-true}
+      SUXEN_PUBLIC_URL: ${SUXEN_PUBLIC_URL:-}
+      SUXEN_OIDC_STATE_SECRET: ${SUXEN_OIDC_STATE_SECRET:-}
+    volumes:
+      - suxen-data:/var/lib/suxen
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  suxen-data: {}

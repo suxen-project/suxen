@@ -1,0 +1,135 @@
+name: suxen-capacity
+
+x-suxen: &suxen
+  build:
+    context: ../..
+  entrypoint: ["/bin/sh", "-ec", "printf '%s\n' \"$${SUXEN_PROVISION_DOCUMENT}\" > /tmp/provision.yaml; exec /usr/local/bin/suxen serve"]
+  environment: &suxen-environment
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin
+    AWS_REGION: us-east-1
+    SUXEN_BLOBSTORE: s3://suxen-capacity/blobs?region=us-east-1&endpoint=http%3A%2F%2Fstorage-proxy%3A8080&pathStyle=true
+    SUXEN_BOOTSTRAP_PASSWORD: capacity-admin-password
+    SUXEN_BOOTSTRAP_TOKEN: suxen-capacity-admin-token-value
+    SUXEN_CLEANUP_INTERVAL: "0"
+    SUXEN_DB: postgres://suxen:suxen-password@postgres:5432/suxen?sslmode=disable
+    SUXEN_GC_INTERVAL: "0"
+    SUXEN_LISTEN: :8080
+    SUXEN_MAX_CONCURRENT_UPLOADS: "4"
+    SUXEN_MAX_UPLOAD_BYTES: "67108864"
+    SUXEN_MIGRATE_INTERVAL: "0"
+    SUXEN_PROVISION: file:///tmp/provision.yaml
+    SUXEN_PROVISION_DOCUMENT: |
+      apiVersion: suxen.io/v1
+      resources:
+        - kind: repository
+          name: npm-capacity
+          spec:
+            format: npm
+            type: hosted
+    SUXEN_READ_TIMEOUT: 30s
+    SUXEN_WRITE_TIMEOUT: 5m
+  depends_on:
+    minio-init:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    storage-proxy:
+      condition: service_healthy
+  mem_limit: ${CAPACITY_MEMORY_LIMIT:-1g}
+  expose: ["8080"]
+  ports: ["127.0.0.1::8080"]
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+    interval: 2s
+    timeout: 2s
+    retries: 45
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: suxen
+      POSTGRES_PASSWORD: suxen-password
+      POSTGRES_USER: suxen
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suxen -d suxen"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+
+  minio:
+    build:
+      context: ../support/minio
+      target: minio
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/minio/health/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes: ["minio-data:/data"]
+
+  minio-init:
+    build:
+      context: ../support/minio
+      target: mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-ec", "mc alias set local http://minio:9000 minioadmin minioadmin; mc mb --ignore-existing local/suxen-capacity"]
+
+  storage-proxy:
+    build:
+      context: ../..
+      dockerfile: test/capacity/Dockerfile
+    command: ["proxy", "-listen", ":8080", "-target", "http://minio:9000", "-delay", "${CAPACITY_STORAGE_LATENCY:-5ms}"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  suxen-a:
+    <<: *suxen
+    volumes: ["suxen-a-data:/var/lib/suxen"]
+
+  suxen-b:
+    <<: *suxen
+    profiles: ["three"]
+    volumes: ["suxen-b-data:/var/lib/suxen"]
+
+  suxen-c:
+    <<: *suxen
+    profiles: ["three"]
+    volumes: ["suxen-c-data:/var/lib/suxen"]
+
+  load-balancer:
+    profiles: ["three"]
+    build:
+      context: ../..
+      dockerfile: test/capacity/Dockerfile.nginx
+    depends_on:
+      suxen-a: {condition: service_healthy}
+      suxen-b: {condition: service_healthy}
+      suxen-c: {condition: service_healthy}
+    ports: ["127.0.0.1::8080"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+volumes:
+  minio-data: {}
+  postgres-data: {}
+  suxen-a-data: {}
+  suxen-b-data: {}
+  suxen-c-data: {}

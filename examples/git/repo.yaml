@@ -1,0 +1,25 @@
+apiVersion: suxen.io/v1
+resources:
+  # A generic git proxy over GitHub. suxen's git format serves any upstream git
+  # repository as depth-1 snapshots, so build hosts and CI clone external
+  # repositories through suxen — caching them, pinning commits, and insulating
+  # from upstream rate limits and outages. Clone URLs map straight through:
+  # <suxen>/repository/github/<owner>/<repo>.git -> https://github.com/<owner>/<repo>.git
+  - kind: repository
+    name: github
+    spec:
+      format: git
+      type: proxy
+      # A repository's upstream is a secret (it may embed credentials); GitHub
+      # is public, so it is given inline here.
+      upstream: https://github.com
+
+  # A second git proxy over the Arch User Repository, whose packages are each a
+  # single-branch git repository at https://aur.archlinux.org/<pkg>.git holding a
+  # PKGBUILD build recipe (not a built package).
+  - kind: repository
+    name: aur
+    spec:
+      format: git
+      type: proxy
+      upstream: https://aur.archlinux.org

@@ -1,0 +1,9 @@
+apiVersion: suxen.io/v1
+resources:
+  # A hosted raw repository. Its bytes land in the S3 (MinIO) blob store the
+  # launcher is pointed at, not on local disk — the point of this example.
+  - kind: repository
+    name: files
+    spec:
+      format: raw
+      type: hosted

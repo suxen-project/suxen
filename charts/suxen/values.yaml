@@ -1,0 +1,250 @@
+image:
+  repository: ghcr.io/suxen-project/suxen
+  # Empty uses the chart appVersion, keeping each chart tied to its matching image.
+  # The project workflow publishes only the standard UI-capable image.
+  tag: ""
+  # IfNotPresent lets a node reuse an already-pulled image, which matters here:
+  # do NOT point repository at a registry this same Suxen instance serves. Its
+  # pods would then pull their own image through themselves, so a full outage —
+  # or deploying a new tag while Suxen is down — cannot recover (the pull has no
+  # backend). Use an external/mirror registry with immutable tags; keep this
+  # IfNotPresent so a cached image survives a registry outage.
+  pullPolicy: IfNotPresent
+
+# Pull secrets for image.repository, e.g. when it points at an external private
+# registry (the recommended way to avoid pulling the image through Suxen itself).
+imagePullSecrets: []
+# - name: registry-credentials
+
+# The OCI chart is named suxen-chart to keep it separate from the suxen image.
+# This override keeps the deployed Kubernetes resource names concise.
+nameOverride: suxen
+fullnameOverride: ""
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  # External Service port. The pod listener, named http container port, and
+  # health probes remain fixed at 8080; the Service maps this port to http.
+  port: 8080
+  # Used only when provisioning.document is not inline. Extra Service/container
+  # ports are otherwise derived from OCI repository endpoints.ports.
+  extraPorts: []
+  # - name: oci-docker
+  #   port: 5000
+  #   targetPort: 5000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: suxen.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # Used only when provisioning.document is not inline. Extra Ingresses are
+  # otherwise derived from OCI repository endpoints.hosts.
+  extraHosts: []
+  # - host: registry.example.com
+  #   servicePort: http
+  #   annotations: {}
+  #   tls:
+  #     - secretName: suxen-registry-tls
+  # TLS and annotations for derived OCI hosts. Keys must match endpoints.hosts.
+  # Extra Ingresses use the primary http Service port unless servicePort is set.
+  ociHosts: {}
+  # registry.example.com:
+  #   annotations: {}
+  #   tls:
+  #     - secretName: suxen-registry-tls
+
+
+persistence:
+  enabled: true
+  size: 20Gi
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+
+database:
+  url: ""
+  # existingSecret is a PostgreSQL URL source; SQLite must use the chart-managed
+  # single-node data volume instead.
+  existingSecret: ""
+  secretKey: database-url
+  bundled:
+    enabled: false
+    instances: 3
+    storage:
+      size: 10Gi
+      storageClass: ""
+
+blobStore:
+  url: ""
+  # existingSecret is an S3 or GCS URL source. With the default SQLite database,
+  # the chart-managed PVC remains mounted for metadata even though blobs are in
+  # object storage.
+  # The data volume becomes ephemeral only when the database is also external.
+  # Filesystem blob storage must use the chart-managed PVC.
+  existingSecret: ""
+  secretKey: blobstore-url
+  # S3 credentials are environment variables in credentialsSecret. For GCS,
+  # mount a service-account JSON key with gcsCredentialsSecret, or leave it empty
+  # when application default credentials are available through the node environment.
+  credentialsSecret: ""
+  gcsCredentialsSecret: ""
+  gcsCredentialsKey: credentials.json
+  # shared asserts that the filesystem blob store sits on storage every replica
+  # can reach (a ReadWriteMany volume), letting the chart-managed PVC back a
+  # multi-replica deployment without object storage. It sets
+  # SUXEN_BLOBSTORE_SHARED=true.
+  # Only enable it when persistence.accessModes includes ReadWriteMany on a
+  # backend with atomic rename and close-to-open consistency (e.g. CephFS).
+  shared: false
+
+bootstrap:
+  # Required whenever Postgres, object storage, or config.cluster is enabled.
+  user: admin
+  existingSecret: ""
+  passwordKey: bootstrap-password
+  tokenKey: bootstrap-token
+
+# Declarative control-plane resources applied once by the elected startup
+# replica. Use either document or existingConfigMap. Secret references in the
+# document may point at environmentSecrets or absolute paths in secretMounts.
+# Kubernetes does not restart pods when external ConfigMap or Secret data
+# changes. After rotating either, run a Deployment rollout restart so startup
+# reconciliation resolves the new values.
+provisioning:
+  enabled: false
+  document: ""
+  existingConfigMap: ""
+  configMapKey: desired-state.yaml
+  environmentSecrets: []
+  # - name: suxen-provision-environment
+  secretMounts: []
+  # - name: suxen-provision-files
+  #   mountPath: /etc/suxen/provision-secrets
+
+oidc:
+  publicURL: ""
+  existingSecret: ""
+  stateSecretKey: oidc-state-secret
+
+config:
+  # Explicitly enable cluster topology checks. Postgres or object storage also
+  # enables singleton scheduler lease gating automatically when this value is false.
+  cluster: false
+  # Runtime kill switch for images that contain the embedded administration UI.
+  # Custom images compiled with the noui build tag never serve UI routes.
+  uiEnabled: true
+  logLevel: info
+  maxUploadBytes: "10737418240"
+  maxConcurrentUploads: "4"
+  # Authentication failures are tracked per pod and direct socket peer. Keep the
+  # values aligned across replicas so load balancing has predictable behavior.
+  authFailureLimit: 10
+  authFailureWindow: 1m
+  authLockout: 5m
+  # Only these direct proxy networks may supply X-Forwarded-For for auth throttling.
+  authTrustedProxyCIDRs: []
+  # A zero overall deadline permits long streaming uploads and downloads.
+  # Request headers remain bounded by the server's 10s header timeout.
+  readTimeout: 0
+  writeTimeout: 0
+  cleanupInterval: 1h
+  gcInterval: 1h
+  # Scheduled integrity verification is opt-in because it can read every blob.
+  verifyInterval: 0
+  # Advances stores placed into the draining state; 0 disables migration work.
+  migrateInterval: 1m
+  webhookRetryBase: 1s
+  webhookPollInterval: 1s
+  webhookMaxAttempts: 8
+  proxyManifestTTL: 5m
+  # Overall OIDC and webhook request deadline.
+  outboundTimeout: 30s
+  # Maximum wait for proxy upstream response headers. Bodies stream without an
+  # overall client deadline.
+  proxyResponseHeaderTimeout: 30s
+  # Exact hosts or narrow CIDRs for internal proxy, webhook, or OIDC services.
+  # These override the default private/link-local/loopback address deny-list.
+  outboundAllowedHosts: []
+  outboundAllowedCIDRs: []
+  # A separate credential boundary for cross-host registry Bearer token realms.
+  proxyTokenRealmHosts: []
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    # npm's JSON and base64 request representation is buffered. The capacity
+    # baseline exercises four concurrent near-limit requests at this limit.
+    # Re-run it before lowering memory or increasing maxConcurrentUploads.
+    memory: 1Gi
+
+# Graceful shutdown drain. The ingress routes to pod IPs, so a terminating pod
+# must leave the Service endpoints before its HTTP listener closes on SIGTERM;
+# otherwise in-flight requests — including kubelet pulls of Suxen's own
+# self-hosted registry image — get "connection refused" and the ingress returns
+# 502 during rolling updates. preStop holds the pod, still serving and not yet
+# signalled, long enough for that endpoint removal to propagate. Set to 0 to
+# disable. The alpine base image provides /bin/sleep.
+lifecycle:
+  preStopDrainSeconds: 10
+# Must exceed preStopDrainSeconds plus the server's ~15s graceful shutdown.
+terminationGracePeriodSeconds: 45
+
+# A startup probe shields the pod while its HTTP listener comes up, so liveness
+# and readiness only begin once it is bound (failureThreshold * periodSeconds is
+# the startup budget).
+startupProbe:
+  enabled: true
+  periodSeconds: 3
+  failureThreshold: 20
+# /readyz gates only on the metadata database (blob stores are deliberately not
+# checked, so a shared-store blip cannot flip all replicas NotReady at once).
+# Keep the probe timeout above the handler's own 2s budget and allow a few
+# failures of slack so transient database latency does not drop every replica.
+readinessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+# /healthz has no dependencies, so liveness only restarts a genuinely wedged
+# process; it never reacts to database or blob-store latency.
+livenessProbe:
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  labels: {}
+  # /metrics requires a bearer token with admin:stats:read. The Secret must
+  # exist in the release namespace; the chart never creates or reads it.
+  bearerTokenSecret:
+    name: ""
+    key: token
+
+cloudnative-pg:
+  enabled: false
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

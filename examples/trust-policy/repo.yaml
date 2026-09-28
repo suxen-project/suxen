@@ -1,0 +1,29 @@
+apiVersion: suxen.io/v1
+resources:
+  # A trust policy verifies provenance for raw assets and OCI manifests. In
+  # verify-on-push mode an upload is rejected unless it carries a signature made
+  # by one of the policy's public keys, over the asset's digest. The key below
+  # is a throwaway example whose private half is not shipped, so as configured
+  # every upload is rejected — replace it with your own public key (see the
+  # README) to publish signed artifacts. The resource name is the repository it
+  # binds to.
+  - kind: trustPolicy
+    name: raw
+    spec:
+      mode: verify-on-push
+      publicKeys:
+        - |
+          -----BEGIN PUBLIC KEY-----
+          MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfqjEL+jMLSm3Wc9LbfrYR1Ru5TDd
+          ZgvE9XZJvX/da6YojbyGUGkYZEGdoVy4MtyJajesBcpSVmBhSVsPxMR6+A==
+          -----END PUBLIC KEY-----
+
+  # A second repository whose trust policy is NOT provisioned, so an operator can
+  # manage it out-of-band with `suxenctl trust-policy set` using their own key —
+  # the realistic workflow, since signing keys are not committed. The README's
+  # generate → register → sign flow targets this repository.
+  - kind: repository
+    name: signed
+    spec:
+      format: raw
+      type: hosted

@@ -1,0 +1,13 @@
+apiVersion: suxen.io/v1
+resources:
+  # A download gate withholds an asset until it satisfies ALL of the gate's
+  # criteria. Here a raw asset is served only once it carries a `scan.status`
+  # attribute equal to "passed" — a quarantine-until-scanned workflow. The
+  # `scan` namespace is a free-form attribute an operator (or a scanner) sets;
+  # the resource name is the repository it binds to.
+  - kind: downloadGate
+    name: raw
+    spec:
+      criteria:
+        - {path: "scan.status", op: "=", value: "passed"}
+      enabled: true

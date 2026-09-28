@@ -1,0 +1,20 @@
+apiVersion: suxen.io/v1
+resources:
+  # A classification labels assets as they are stored, by matching their
+  # projected attributes. The labels land under the reserved `classification.`
+  # namespace and feed other policies (cleanup criteria, download gates). This
+  # does not block anything — it tags. The resource name is the repository it
+  # binds to (here the bootstrap `raw` repository).
+  - kind: classification
+    name: raw
+    spec:
+      rules:
+        # Later rules win on the same key, so order from general to specific.
+        - when:
+            - {path: "raw.path", op: "matches", value: "^releases/.*"}
+          key: tier
+          value: release
+        - when:
+            - {path: "raw.path", op: "matches", value: "^snapshots/.*"}
+          key: tier
+          value: snapshot

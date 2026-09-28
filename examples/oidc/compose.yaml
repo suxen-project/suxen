@@ -1,0 +1,12 @@
+# A dedicated support stack for the OIDC example: a Dex identity provider.
+# suxen runs natively; only the IdP is containerized. Dex is published on the
+# loopback port named by its issuer (see dex.yaml) so the native suxen process
+# can perform discovery, the password grant, and token verification against it.
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.42.0@sha256:1b4a6eee8550240b0faedad04d984ca939513650e1d9bd423502c67355e3822f
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+    ports:
+      - "127.0.0.1:5556:5556"

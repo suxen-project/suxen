@@ -1,0 +1,53 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "postUpdateOptions": [
+    "gomodTidy"
+  ],
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**"
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track pinned CI tool versions declared in shell scripts.",
+      "managerFilePatterns": [
+        "/^(scripts|test/e2e)/.*\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: extractVersion=(?<extractVersion>\\S+))?\\n(?:[A-Z][A-Z_]*_VERSION|version)=(?<currentValue>\\S+)"
+      ],
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "customType": "regex",
+      "description": "Track immutable container images referenced from shell scripts.",
+      "managerFilePatterns": [
+        "/^examples/.*\\.sh$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)\\n[A-Z][A-Z_]*_IMAGE=\"[^:\"]+:(?<currentValue>[^@\"]+)@(?<currentDigest>sha256:[a-f0-9]+)\""
+      ],
+      "versioningTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "examples/plugin-memblob is a separate module that pins the root dependencies indirectly. Update those pins in the same PR as the root bump and tidy the module, so `make check-example` stays green.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchFileNames": [
+        "examples/**"
+      ],
+      "matchDepTypes": [
+        "indirect"
+      ],
+      "enabled": true
+    }
+  ]
+}

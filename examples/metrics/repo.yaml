@@ -1,0 +1,16 @@
+apiVersion: suxen.io/v1
+resources:
+  # A hosted raw repository, so an upload produces some traffic and blob activity
+  # for the metrics endpoint to report.
+  - kind: repository
+    name: files
+    spec:
+      format: raw
+      type: hosted
+
+  # A role WITHOUT admin:stats:read, used by the test to show that the metrics
+  # endpoint rejects a token that lacks the stats privilege.
+  - kind: role
+    name: reader
+    spec:
+      privileges: [repository:*:read]

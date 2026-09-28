@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+ARG SDK_IMAGE=suxen-sdk:test
+FROM ${SDK_IMAGE} AS build
+ARG CUSTOM_VERSION=sdk-smoke
+COPY examples/plugin-memblob /tmp/plugin-memblob
+RUN suxen-build \
+    --plugin example.com/suxen-plugin-memblob=/tmp/plugin-memblob \
+    --output /out/suxen \
+    --version "${CUSTOM_VERSION}"
+
+FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+COPY --from=build /out/suxen /usr/local/bin/suxen
+ENV SUXEN_LISTEN=:8080 \
+    SUXEN_DATA=/tmp/suxen \
+    SUXEN_BLOBSTORE=mem://sdk-smoke
+ENTRYPOINT ["/usr/local/bin/suxen"]
+CMD ["serve"]

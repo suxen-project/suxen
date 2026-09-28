@@ -1,0 +1,299 @@
+{{- include "suxen.validateScaling" . }}
+{{- include "suxen.validateOCIEndpoints" . }}
+{{- $sharedBlobs := or .Values.blobStore.existingSecret (hasPrefix "s3://" .Values.blobStore.url) (hasPrefix "gcs://" .Values.blobStore.url) }}
+{{- $sharedDatabase := or .Values.database.bundled.enabled .Values.database.existingSecret (hasPrefix "postgres" .Values.database.url) }}
+{{- $usesDataPVC := and .Values.persistence.enabled (or (not $sharedBlobs) (not $sharedDatabase)) }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "suxen.fullname" . }}
+  labels:
+    {{- include "suxen.labels" . | nindent 4 }}
+spec:
+  {{- if $usesDataPVC }}
+  # The PVC may contain SQLite and/or filesystem blobs. Stop the old pod
+  # before starting its replacement so ReadWriteOncePod cannot deadlock and
+  # ReadWriteOnce never permits overlapping writers on the same node.
+  strategy:
+    type: Recreate
+  {{- else }}
+  strategy:
+    type: RollingUpdate
+  {{- end }}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "suxen.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml .Values.podAnnotations | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.provisioning.enabled .Values.provisioning.document }}
+        checksum/provisioning: {{ .Values.provisioning.document | sha256sum }}
+        {{- end }}
+      labels:
+        {{- include "suxen.selectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: suxen
+          image: {{ include "suxen.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["serve"]
+          env:
+            - name: SUXEN_DATA
+              value: /var/lib/suxen
+            - name: SUXEN_LISTEN
+              value: {{ printf ":%s" (include "suxen.httpPort" .) | quote }}
+            {{- if .Values.provisioning.enabled }}
+            - name: SUXEN_PROVISION
+              value: file:///etc/suxen/provision/desired-state.yaml
+            {{- end }}
+            - name: SUXEN_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            {{- if .Values.config.cluster }}
+            - name: SUXEN_CLUSTER
+              value: "true"
+            {{- end }}
+            {{- if .Values.blobStore.shared }}
+            - name: SUXEN_BLOBSTORE_SHARED
+              value: "true"
+            {{- end }}
+            - name: SUXEN_UI_ENABLED
+              value: {{ .Values.config.uiEnabled | quote }}
+            - name: SUXEN_MAX_UPLOAD_BYTES
+              value: {{ .Values.config.maxUploadBytes | quote }}
+            - name: SUXEN_MAX_CONCURRENT_UPLOADS
+              value: {{ .Values.config.maxConcurrentUploads | quote }}
+            - name: SUXEN_AUTH_FAILURE_LIMIT
+              value: {{ .Values.config.authFailureLimit | quote }}
+            - name: SUXEN_AUTH_FAILURE_WINDOW
+              value: {{ .Values.config.authFailureWindow | quote }}
+            - name: SUXEN_AUTH_LOCKOUT
+              value: {{ .Values.config.authLockout | quote }}
+            {{- if .Values.config.authTrustedProxyCIDRs }}
+            - name: SUXEN_AUTH_TRUSTED_PROXY_CIDRS
+              value: {{ join "," .Values.config.authTrustedProxyCIDRs | quote }}
+            {{- end }}
+            - name: SUXEN_READ_TIMEOUT
+              value: {{ .Values.config.readTimeout | quote }}
+            - name: SUXEN_WRITE_TIMEOUT
+              value: {{ .Values.config.writeTimeout | quote }}
+            - name: SUXEN_CLEANUP_INTERVAL
+              value: {{ .Values.config.cleanupInterval | quote }}
+            - name: SUXEN_GC_INTERVAL
+              value: {{ .Values.config.gcInterval | quote }}
+            - name: SUXEN_VERIFY_INTERVAL
+              value: {{ .Values.config.verifyInterval | quote }}
+            - name: SUXEN_MIGRATE_INTERVAL
+              value: {{ .Values.config.migrateInterval | quote }}
+            - name: SUXEN_WEBHOOK_RETRY_BASE
+              value: {{ .Values.config.webhookRetryBase | quote }}
+            - name: SUXEN_WEBHOOK_POLL_INTERVAL
+              value: {{ .Values.config.webhookPollInterval | quote }}
+            - name: SUXEN_WEBHOOK_MAX_ATTEMPTS
+              value: {{ .Values.config.webhookMaxAttempts | quote }}
+            - name: SUXEN_PROXY_MANIFEST_TTL
+              value: {{ .Values.config.proxyManifestTTL | quote }}
+            - name: SUXEN_OUTBOUND_TIMEOUT
+              value: {{ .Values.config.outboundTimeout | quote }}
+            - name: SUXEN_PROXY_RESPONSE_HEADER_TIMEOUT
+              value: {{ .Values.config.proxyResponseHeaderTimeout | quote }}
+            {{- if .Values.config.outboundAllowedHosts }}
+            - name: SUXEN_OUTBOUND_ALLOWED_HOSTS
+              value: {{ join "," .Values.config.outboundAllowedHosts | quote }}
+            {{- end }}
+            {{- if .Values.config.outboundAllowedCIDRs }}
+            - name: SUXEN_OUTBOUND_ALLOWED_CIDRS
+              value: {{ join "," .Values.config.outboundAllowedCIDRs | quote }}
+            {{- end }}
+            {{- if .Values.config.proxyTokenRealmHosts }}
+            - name: SUXEN_PROXY_TOKEN_REALM_HOSTS
+              value: {{ join "," .Values.config.proxyTokenRealmHosts | quote }}
+            {{- end }}
+            {{- if .Values.database.bundled.enabled }}
+            - name: SUXEN_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "suxen.fullname" . }}-database-app
+                  key: uri
+            {{- else if .Values.database.existingSecret }}
+            - name: SUXEN_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.database.existingSecret }}
+                  key: {{ .Values.database.secretKey }}
+            {{- else if .Values.database.url }}
+            - name: SUXEN_DB
+              value: {{ .Values.database.url | quote }}
+            {{- end }}
+            {{- if .Values.blobStore.existingSecret }}
+            - name: SUXEN_BLOBSTORE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.blobStore.existingSecret }}
+                  key: {{ .Values.blobStore.secretKey }}
+            {{- else if .Values.blobStore.url }}
+            - name: SUXEN_BLOBSTORE
+              value: {{ .Values.blobStore.url | quote }}
+            {{- end }}
+            {{- if .Values.blobStore.gcsCredentialsSecret }}
+            - name: GOOGLE_APPLICATION_CREDENTIALS
+              value: /etc/suxen/gcs/credentials.json
+            {{- end }}
+            {{- if .Values.oidc.publicURL }}
+            - name: SUXEN_PUBLIC_URL
+              value: {{ .Values.oidc.publicURL | quote }}
+            {{- end }}
+            {{- if .Values.oidc.existingSecret }}
+            - name: SUXEN_OIDC_STATE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.oidc.existingSecret }}
+                  key: {{ .Values.oidc.stateSecretKey }}
+            {{- end }}
+            - name: SUXEN_BOOTSTRAP_USER
+              value: {{ .Values.bootstrap.user | quote }}
+            {{- if .Values.bootstrap.existingSecret }}
+            - name: SUXEN_BOOTSTRAP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bootstrap.existingSecret }}
+                  key: {{ .Values.bootstrap.passwordKey }}
+            - name: SUXEN_BOOTSTRAP_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.bootstrap.existingSecret }}
+                  key: {{ .Values.bootstrap.tokenKey }}
+            {{- end }}
+          {{- if or .Values.blobStore.credentialsSecret .Values.provisioning.environmentSecrets }}
+          envFrom:
+            {{- if .Values.blobStore.credentialsSecret }}
+            - secretRef:
+                name: {{ .Values.blobStore.credentialsSecret }}
+            {{- end }}
+            {{- range .Values.provisioning.environmentSecrets }}
+            - secretRef:
+                name: {{ .name }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ include "suxen.httpPort" . }}
+              protocol: TCP
+            {{- range (include "suxen.ociServicePorts" . | fromJson).items }}
+            - name: {{ required "OCI container port name is required" .name }}
+              containerPort: {{ int .port }}
+              protocol: {{ default "TCP" .protocol }}
+            {{- end }}
+          {{- if .Values.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.livenessProbe.failureThreshold }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.readinessProbe.failureThreshold }}
+          {{- if gt (int .Values.lifecycle.preStopDrainSeconds) 0 }}
+          # Stay in rotation and keep serving until the ingress observes this pod
+          # leaving the Service endpoints; only then does SIGTERM close the
+          # listener. Without this, nginx routes to a closed listener mid-rollout
+          # and returns 502 (connection refused).
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sleep", {{ .Values.lifecycle.preStopDrainSeconds | quote }}]
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/suxen
+            - name: temporary
+              mountPath: /tmp
+            {{- if .Values.blobStore.gcsCredentialsSecret }}
+            - name: gcs-credentials
+              mountPath: /etc/suxen/gcs
+              readOnly: true
+            {{- end }}
+            {{- if .Values.provisioning.enabled }}
+            - name: provisioning
+              mountPath: /etc/suxen/provision
+              readOnly: true
+            {{- range $index, $secret := .Values.provisioning.secretMounts }}
+            - name: provisioning-secret-{{ $index }}
+              mountPath: {{ $secret.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if $usesDataPVC }}
+          persistentVolumeClaim:
+            claimName: {{ include "suxen.fullname" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: temporary
+          emptyDir: {}
+        {{- if .Values.blobStore.gcsCredentialsSecret }}
+        - name: gcs-credentials
+          secret:
+            secretName: {{ .Values.blobStore.gcsCredentialsSecret }}
+            defaultMode: 0440
+            items:
+              - key: {{ .Values.blobStore.gcsCredentialsKey }}
+                path: credentials.json
+        {{- end }}
+        {{- if .Values.provisioning.enabled }}
+        - name: provisioning
+          configMap:
+            name: {{ default (printf "%s-provisioning" (include "suxen.fullname" .)) .Values.provisioning.existingConfigMap }}
+            items:
+              - key: {{ .Values.provisioning.configMapKey }}
+                path: desired-state.yaml
+        {{- range $index, $secret := .Values.provisioning.secretMounts }}
+        - name: provisioning-secret-{{ $index }}
+          secret:
+            secretName: {{ $secret.name }}
+        {{- end }}
+        {{- end }}
+      nodeSelector:
+        {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations:
+        {{- toYaml .Values.tolerations | nindent 8 }}
+      affinity:
+        {{- toYaml .Values.affinity | nindent 8 }}

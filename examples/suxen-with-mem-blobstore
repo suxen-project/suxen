@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# suxen-with-mem-blobstore — run a local suxen for the examples.
+#
+# Builds and runs the mem-enabled suxen distribution (examples/plugin-memblob)
+# natively: SQLite metadata + an in-memory blob store + a bootstrap admin. No
+# database, object store, or container is needed for the server itself. Every
+# example starts from this one command.
+#
+# Usage:
+#   examples/suxen-with-mem-blobstore [-f RESOURCES.yaml]
+#
+# With -f, the resource document is provisioned at startup so declared listener
+# ports bind, then applied again through the CLI to demonstrate idempotency.
+# The server runs in the foreground; press Ctrl-C
+# to stop it. The temporary SQLite database and in-memory blobs vanish on exit.
+#
+# Environment overrides:
+#   SUXEN_EXAMPLE_PORT   listen port           (default 8080)
+#   SUXEN_EXAMPLE_TOKEN  bootstrap admin token (default suxen-example-token-abcdef)
+#   SUXEN_EXAMPLE_DATA   data dir              (default: a fresh mktemp -d)
+#   SUXEN_EXAMPLE_PUBLIC_READS
+#                        apply the development anonymous-read profile (default true)
+# Extra SUXEN_* variables already in the environment are passed through, so an
+# example can, for example, set SUXEN_OUTBOUND_ALLOWED_HOSTS for a proxy.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$here/.." && pwd)"
+bin_dir="$here/.bin"
+mkdir -p "$bin_dir"
+
+resources=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-f) resources="$2"; shift 2 ;;
+	-f*) resources="${1#-f}"; shift ;;
+	-h|--help) sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	*) echo "unknown argument: $1" >&2; exit 2 ;;
+	esac
+done
+
+if [ -n "$resources" ]; then
+	# Startup file provisioning requires an absolute file URL. Keep the same
+	# document for the later CLI apply, including when -f used a relative path.
+	resources="$(cd "$(dirname "$resources")" && pwd)/$(basename "$resources")"
+	export SUXEN_PROVISION="file://$resources"
+fi
+
+port="${SUXEN_EXAMPLE_PORT:-8080}"
+token="${SUXEN_EXAMPLE_TOKEN:-suxen-example-token-abcdef}"
+if [ -n "${SUXEN_EXAMPLE_DATA:-}" ]; then
+	data="$SUXEN_EXAMPLE_DATA"; owns_data=""
+	mkdir -p "$data"
+else
+	data="$(mktemp -d)"; owns_data="yes"
+fi
+
+echo ">> building suxen (mem blob store) and suxenctl ..." >&2
+( cd "$repo_root/examples/plugin-memblob" && go build -o "$bin_dir/suxen-mem" ./cmd/suxen-custom )
+( cd "$repo_root" && go build -o "$bin_dir/suxenctl" ./cmd/suxenctl )
+
+export SUXEN_DB="sqlite://$data/metadata.db"
+export SUXEN_BLOBSTORE="${SUXEN_BLOBSTORE:-mem://examples}"
+export SUXEN_BOOTSTRAP_USER="${SUXEN_BOOTSTRAP_USER:-admin}"
+export SUXEN_BOOTSTRAP_PASSWORD="${SUXEN_BOOTSTRAP_PASSWORD:-suxen-example-password}"
+export SUXEN_BOOTSTRAP_TOKEN="$token"
+export SUXEN_LISTEN="127.0.0.1:$port"
+export SUXEN_DATA="$data/data"
+
+"$bin_dir/suxen-mem" &
+server_pid=$!
+cleanup() {
+	kill "$server_pid" 2>/dev/null || true
+	wait "$server_pid" 2>/dev/null || true
+	[ -n "$owns_data" ] && rm -rf "$data"
+}
+trap cleanup EXIT INT TERM
+
+url="http://127.0.0.1:$port"
+echo ">> waiting for $url ..." >&2
+ready=""
+for _ in $(seq 1 100); do
+	# /readyz turns 200 only after bootstrap (admin + token) completes; the
+	# server answers other routes earlier, so this is the correct ready signal.
+	if curl -fsS -o /dev/null "$url/readyz" 2>/dev/null; then ready="yes"; break; fi
+	kill -0 "$server_pid" 2>/dev/null || { echo "server exited during startup:" >&2; cat "$data/data"/*.log 2>/dev/null || true; exit 1; }
+	sleep 0.2
+done
+[ -n "$ready" ] || { echo "server did not become ready" >&2; exit 1; }
+
+if [ -n "$resources" ]; then
+	echo ">> applying $resources ..." >&2
+	SUXEN_URL="$url" SUXEN_TOKEN="$token" "$bin_dir/suxenctl" apply -f "$resources"
+fi
+if [ "${SUXEN_EXAMPLE_PUBLIC_READS:-true}" = "true" ]; then
+	echo ">> enabling the loopback-only development access profile ..." >&2
+	SUXEN_URL="$url" SUXEN_TOKEN="$token" \
+		"$bin_dir/suxenctl" apply -f "$here/development/repo.yaml"
+else
+	echo ">> leaving artifact reads private ..." >&2
+fi
+
+cat >&2 <<BANNER
+
+  suxen is running at $url
+    admin user:  ${SUXEN_BOOTSTRAP_USER}  /  ${SUXEN_BOOTSTRAP_PASSWORD}
+    admin token: ${token}
+    blob store:  ${SUXEN_BLOBSTORE}   metadata: sqlite (ephemeral)
+  Press Ctrl-C to stop.
+
+BANNER
+
+wait "$server_pid"

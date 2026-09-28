@@ -1,0 +1,18 @@
+apiVersion: suxen.io/v1
+resources:
+  # A hosted raw repository: arbitrary files addressed by path. Writes need the
+  # repository:files:write privilege; the development profile enables public reads.
+  - kind: repository
+    name: files
+    spec:
+      format: raw
+      type: hosted
+      allowOverwrite: true
+
+  # Immutable release paths; identical retries remain allowed.
+  - kind: repository
+    name: releases
+    spec:
+      format: raw
+      type: hosted
+      allowOverwrite: false

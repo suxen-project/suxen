@@ -1,0 +1,6 @@
+apiVersion: v2
+name: suxen-e2e-fixture
+description: Minimal chart used by the suxen OCI interop suite
+type: application
+version: 0.1.0
+appVersion: "1.0"

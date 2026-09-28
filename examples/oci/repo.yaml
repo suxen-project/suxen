@@ -1,0 +1,36 @@
+apiVersion: suxen.io/v1
+resources:
+  # A hosted OCI registry. suxen serves the OCI /v2 API at the registry root of
+  # its listen host, routing it to the repository named "oci", so any OCI client
+  # (docker, oras, crane, helm) uses `<suxen-host>/<name>:<tag>` directly — no
+  # /repository/ path. This repository is created at bootstrap; declaring it here
+  # keeps the example self-contained (apply is idempotent).
+  - kind: repository
+    name: oci
+    spec:
+      format: oci
+      type: hosted
+      allowOverwrite: false
+
+  # A pull-through cache of Docker Hub, bound to its own listen port so clients
+  # use it as a standalone registry root: 127.0.0.1:5001/<image>. Binding a port
+  # (or a hostname) is how a second OCI repository gets its own /v2 root — the
+  # primary port's /v2 root always serves the repository named "oci".
+  - kind: repository
+    name: dockerhub
+    spec:
+      format: oci
+      type: proxy
+      upstream: https://registry-1.docker.io
+      endpoints:
+        ports:
+          - 5001
+
+  # Attach this role to a scoped user (see the README) so CI can push without the
+  # admin account. The development profile enables anonymous pulls.
+  - kind: role
+    name: image-publisher
+    spec:
+      description: Push images and artifacts to the hosted OCI registry
+      privileges:
+        - repository:oci:write

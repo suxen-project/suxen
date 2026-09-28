@@ -1,0 +1,18 @@
+apiVersion: suxen.io/v1
+resources:
+  # Deliver signed notifications to the receiver when assets change in the raw
+  # repository. suxen signs each delivery with HMAC-SHA256 using `secret` (sent
+  # as X-Suxen-Signature-256), which the receiver verifies with the same secret.
+  # The secret is the webhook's kind-specific secret field (stripped from the
+  # stored spec); inline here so the example applies with no external input.
+  - kind: webhook
+    name: raw-events
+    spec:
+      url: http://127.0.0.1:9080/webhook
+      events:
+        - asset.uploaded
+        - asset.deleted
+      repositories:
+        - raw
+      enabled: true
+      secret: example-webhook-secret

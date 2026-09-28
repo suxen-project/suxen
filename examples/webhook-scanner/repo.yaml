@@ -1,0 +1,57 @@
+apiVersion: suxen.io/v1
+resources:
+  # A hosted repository whose downloads are quarantined until a scan passes.
+  - kind: repository
+    name: uploads
+    spec:
+      format: raw
+      type: hosted
+
+  # A proxy that fetches from an upstream on first pull. Its cached assets are
+  # gated the same way, so a freshly fetched artifact is quarantined until it is
+  # scanned. The upstream (with its credentials) is a secretRef, resolved at
+  # apply time from SUXEN_MIRROR_UPSTREAM (start.sh points it at the support
+  # upstream in compose.yaml).
+  - kind: repository
+    name: mirror
+    spec:
+      format: raw
+      type: proxy
+      # The repository's upstream is its kind-specific secret (it can carry
+      # credentials), so it is a secretRef resolved at apply time.
+      secretRef: { env: SUXEN_MIRROR_UPSTREAM }
+
+  # The download gate: withhold any asset until scan.status=passed. Bound to both
+  # repositories.
+  - kind: downloadGate
+    name: uploads
+    spec:
+      criteria: [{path: "scan.status", op: "=", value: "passed"}]
+      enabled: true
+  - kind: downloadGate
+    name: mirror
+    spec:
+      criteria: [{path: "scan.status", op: "=", value: "passed"}]
+      enabled: true
+
+  # The scanner's service account is scoped to exactly "annotate" — it can stamp
+  # attributes but cannot push or delete artifacts (repository:*:write/delete).
+  - kind: role
+    name: scanner
+    spec:
+      description: Stamp scan attributes on assets (no push or delete)
+      privileges:
+        - repository:uploads:annotate
+        - repository:mirror:annotate
+
+  # Notify the scanner when an asset is uploaded (hosted) or fetched into the
+  # proxy cache — both raise asset.uploaded. suxen signs each delivery with the
+  # HMAC secret; the receiver verifies it.
+  - kind: webhook
+    name: scanner
+    spec:
+      url: http://127.0.0.1:9091/webhook
+      events: [asset.uploaded]
+      repositories: [uploads, mirror]
+      enabled: true
+      secret: example-webhook-secret

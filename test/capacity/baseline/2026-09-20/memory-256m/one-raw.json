@@ -1,0 +1,17 @@
+{
+  "operation": "raw-put",
+  "target": "http://127.0.0.1:33018",
+  "requests": 4,
+  "succeeded": 4,
+  "payloadBytes": 262144,
+  "concurrency": 1,
+  "elapsedMillis": 72.621391,
+  "requestsPerSecond": 55.08018980247845,
+  "payloadMiBPerSecond": 3.442511862654903,
+  "p50Millis": 18.462359,
+  "p95Millis": 19.821597,
+  "maxMillis": 19.821597,
+  "statuses": {
+    "201 Created": 4
+  }
+}

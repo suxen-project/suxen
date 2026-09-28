@@ -1,0 +1,36 @@
+apiVersion: suxen.io/v1
+resources:
+  # A hosted raw repository that only writers may push to. The development profile
+  # grants anonymous reads, so the OIDC-derived write privilege is what this
+  # example demonstrates.
+  - kind: repository
+    name: app
+    spec:
+      format: raw
+      type: hosted
+
+  # The privilege the IdP hands out. It is bound to no local user; it is granted
+  # by the OIDC provider below to whoever authenticates through the IdP.
+  - kind: role
+    name: oidc-writer
+    spec:
+      privileges: [repository:app:read, repository:app:write]
+
+  # The identity provider. suxen never stores these users' passwords: on a Basic
+  # request whose credentials match no local user, suxen runs the OAuth2 password
+  # grant against every provider that opted in, verifies the returned id_token,
+  # and maps the identity to roles.
+  - kind: oidcProvider
+    name: dex
+    spec:
+      issuer: http://127.0.0.1:5556/dex
+      clientId: suxen
+      # The client secret is resolved from the environment at apply time, never
+      # committed. start.sh sets SUXEN_OIDC_CLIENT_SECRET.
+      secretRef: { env: SUXEN_OIDC_CLIENT_SECRET }
+      scopes: [openid, email]
+      # Enable the non-interactive password grant (docker login / CI / curl).
+      allowPasswordGrant: true
+      # Every user who authenticates through this provider gets these roles.
+      # (Per-group mapping is groupRoles + groupsClaim; see the README.)
+      defaultRoles: [oidc-writer]

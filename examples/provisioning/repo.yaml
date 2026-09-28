@@ -1,0 +1,11 @@
+apiVersion: suxen.io/v1
+resources:
+  # The baseline desired state. `suxenctl apply` reconciles a document like
+  # `kubectl apply`: it is idempotent, supports --dry-run and --prune, and marks
+  # what it creates as managed (protected from ad-hoc API edits). This one
+  # repository is the starting point the README and test build on.
+  - kind: repository
+    name: alpha
+    spec:
+      format: raw
+      type: hosted

@@ -1,0 +1,35 @@
+apiVersion: suxen.io/v1
+resources:
+  # Cache the public crates.io sparse index.
+  - kind: repository
+    name: cargo-proxy
+    spec:
+      format: cargo
+      type: proxy
+      upstream: https://index.crates.io
+
+  # Accept internal publishes (cargo publish).
+  - kind: repository
+    name: cargo-hosted
+    spec:
+      format: cargo
+      type: hosted
+
+  # One registry serving internal crates and cached public ones.
+  - kind: repository
+    name: cargo
+    spec:
+      format: cargo
+      type: group
+      members:
+        - cargo-hosted
+        - cargo-proxy
+
+  # Attach this role to a scoped user (see the README) so CI can publish without
+  # the admin token.
+  - kind: role
+    name: cargo-publisher
+    spec:
+      description: Publish to the hosted Cargo registry
+      privileges:
+        - repository:cargo-hosted:write

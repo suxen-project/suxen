@@ -1,0 +1,31 @@
+# Source of truth for the independently versioned public contract surfaces.
+#
+# Each surface carries its own SemVer, decoupled from the application version.
+# This file is the only hand-edited version record: runtime reporting (the /api
+# discovery matrix and the served OpenAPI info.version) read it. All surfaces
+# share the application RC version until the stable v1 contract is frozen.
+#
+# Semantics of each field:
+#   id      stable identifier, never renamed once published
+#   version SemVer for this surface
+#   source  the in-tree package whose exported API defines the contract (Go SPIs)
+#   path    the URL major prefix a wire surface is served under; its major must
+#           equal major(version)
+#
+# Prerelease contract locks are intentionally absent. Establish the stable
+# baselines when v1.0.0 is published.
+surfaces:
+  - id: blobstore-spi
+    version: 1.0.0-rc.1
+    source: spi/blob
+  - id: format-spi
+    version: 1.0.0-rc.1
+    source: spi/format
+  - id: plugin-api-spi
+    version: 1.0.0-rc.1
+    source: spi/api
+  - id: http-api
+    version: 1.0.0-rc.1
+    path: /api/v1
+  - id: webhook-api
+    version: 1.0.0-rc.1

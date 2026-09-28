@@ -1,0 +1,21 @@
+{{- if .Values.database.bundled.enabled }}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "suxen.fullname" . }}-database
+  labels:
+    {{- include "suxen.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.database.bundled.instances }}
+  bootstrap:
+    initdb:
+      database: suxen
+      owner: suxen
+  storage:
+    size: {{ .Values.database.bundled.storage.size }}
+    {{- if .Values.database.bundled.storage.storageClass }}
+    storageClass: {{ .Values.database.bundled.storage.storageClass | quote }}
+    {{- end }}
+  monitoring:
+    enablePodMonitor: {{ .Values.serviceMonitor.enabled }}
+{{- end }}

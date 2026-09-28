@@ -1,0 +1,1 @@
+upstream artifact fetched through the mirror proxy

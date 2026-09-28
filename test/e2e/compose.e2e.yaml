@@ -1,0 +1,352 @@
+name: suxen-e2e
+
+x-suxen: &suxen
+  build:
+    context: ../..
+    args:
+      VERSION: ${SUXEN_E2E_VERSION:-e2e}
+  entrypoint:
+    - /bin/sh
+    - -ec
+    - |
+      printf '%s\n' "$${SUXEN_PROVISION_DOCUMENT}" > /tmp/provision.yaml
+      exec /usr/local/bin/suxen serve
+  environment: &suxen-environment
+    AWS_ACCESS_KEY_ID: minioadmin
+    AWS_SECRET_ACCESS_KEY: minioadmin
+    AWS_REGION: us-east-1
+    E2E_PUBLISHER_PASSWORD: publisher-password
+    E2E_RAW_UPSTREAM_URL: http://upstream:upstream-password@raw-upstream:8080/files
+    E2E_WEBHOOK_SECRET: webhook-test-secret
+    SUXEN_BLOBSTORE: s3://suxen-e2e/blobs?region=us-east-1&endpoint=http%3A%2F%2Fminio%3A9000&pathStyle=true
+    SUXEN_BOOTSTRAP_PASSWORD: admin-password
+    SUXEN_BOOTSTRAP_TOKEN: ${SUXEN_E2E_ADMIN_TOKEN:-suxen-e2e-admin-token-value}
+    SUXEN_CLEANUP_INTERVAL: 2s
+    SUXEN_GC_INTERVAL: 2s
+    # Fast webhook retry cadence so the dead-letter path (8 attempts) completes in
+    # a few seconds instead of the ~127s the 1s exponential default takes.
+    SUXEN_WEBHOOK_RETRY_BASE: 25ms
+    SUXEN_WEBHOOK_POLL_INTERVAL: 100ms
+    SUXEN_DB: postgres://suxen:suxen-password@postgres:5432/suxen?sslmode=disable
+    SUXEN_LOG_LEVEL: debug
+    SUXEN_MAX_UPLOAD_BYTES: 16777216
+    SUXEN_OUTBOUND_ALLOWED_HOSTS: authenticated-registry,minio,raw-upstream,registry-auth,upstream-registry,webhook-sink
+    SUXEN_PROVISION: file:///tmp/provision.yaml
+    SUXEN_PROVISION_DOCUMENT: |
+      apiVersion: suxen.io/v1
+      resources:
+        - kind: repository
+          name: raw-proxy
+          spec:
+            format: raw
+            type: proxy
+            secretRef:
+              env: E2E_RAW_UPSTREAM_URL
+        - kind: repository
+          name: raw-group
+          spec:
+            format: raw
+            type: group
+            members: [raw, raw-proxy]
+        - kind: repository
+          name: oci-proxy
+          spec:
+            format: oci
+            type: proxy
+            upstream: http://upstream-registry:5000
+        - kind: repository
+          name: oci-group
+          spec:
+            format: oci
+            type: group
+            members: [oci, oci-proxy]
+        - kind: repository
+          name: oci-auth-proxy
+          spec:
+            format: oci
+            type: proxy
+            upstream: http://authenticated-registry:5000
+        - kind: repository
+          name: maven-hosted
+          spec:
+            format: maven
+            type: hosted
+        - kind: repository
+          name: maven-proxy
+          spec:
+            format: maven
+            type: proxy
+            upstream: http://upstream:upstream-password@raw-upstream:8080/files/maven
+        - kind: repository
+          name: maven-group
+          spec:
+            format: maven
+            type: group
+            members: [maven-hosted, maven-proxy]
+        - kind: role
+          name: publisher
+          spec:
+            description: E2E publisher with no delete permission
+            privileges:
+              - repository:raw:read
+              - repository:raw:write
+              - repository:oci:read
+              - repository:oci:write
+        - kind: user
+          name: publisher
+          spec:
+            roles: [publisher]
+            secretRef:
+              env: E2E_PUBLISHER_PASSWORD
+        - kind: cleanupPolicy
+          name: e2e-cleanup
+          spec:
+            repositories: [raw]
+            criteria:
+              - path: classification.label
+                op: "="
+                value: disposable
+            keepLast: 1
+            action: delete
+            enabled: false
+        - kind: classification
+          name: raw
+          spec:
+            rules:
+              - key: label
+                value: retained
+              - when:
+                  - path: sys.path
+                    op: matches
+                    value: ^cleanup/
+                key: label
+                value: disposable
+        - kind: webhook
+          name: events
+          spec:
+            url: http://webhook-sink:8080/webhook
+            events: [asset.uploaded, asset.deleted]
+            enabled: true
+            secretRef:
+              env: E2E_WEBHOOK_SECRET
+        - kind: webhook
+          name: failing
+          spec:
+            url: http://webhook-sink:8080/fail
+            events: [asset.uploaded]
+            repositories: [raw]
+            enabled: false
+            secretRef:
+              env: E2E_WEBHOOK_SECRET
+    SUXEN_PROXY_MANIFEST_TTL: 30s
+  depends_on:
+    minio-init:
+      condition: service_completed_successfully
+    postgres:
+      condition: service_healthy
+    raw-upstream:
+      condition: service_healthy
+    upstream-registry:
+      condition: service_started
+    authenticated-registry:
+      condition: service_started
+    webhook-sink:
+      condition: service_healthy
+  expose:
+    - "8080"
+  ports:
+    - "${SUXEN_E2E_PUBLISH_ADDRESS:-127.0.0.1}::8080"
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+    interval: 2s
+    timeout: 2s
+    retries: 45
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:742f40ea20b9ff2ff31db5458d127452988a2164df9e17441e191f3b72252193
+    environment:
+      POSTGRES_DB: suxen
+      POSTGRES_PASSWORD: suxen-password
+      POSTGRES_USER: suxen
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U suxen -d suxen"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  minio:
+    build:
+      context: ../support/minio
+      target: minio
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: minioadmin
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:9000/minio/health/ready"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    build:
+      context: ../support/minio
+      target: mc
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin
+        mc mb --ignore-existing local/suxen-e2e
+  upstream-registry:
+    build:
+      context: ../..
+      dockerfile: test/e2e/zot/Dockerfile
+    expose:
+      - "5000"
+    ports:
+      - "${SUXEN_E2E_PUBLISH_ADDRESS:-127.0.0.1}::5000"
+    volumes:
+      - registry-data:/var/lib/registry
+
+  registry-auth:
+    build:
+      context: ../..
+      dockerfile: test/e2e/support/Dockerfile
+    command: ["registry-token"]
+    environment:
+      E2E_LISTEN: :8080
+      E2E_STATE: /state
+      E2E_TOKEN_CERTIFICATE: /state/registry-token-cert.pem
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/e2e-support", "health", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    volumes:
+      - registry-auth-data:/state
+
+  authenticated-registry:
+    image: registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+    depends_on:
+      registry-auth:
+        condition: service_healthy
+    environment:
+      REGISTRY_AUTH: token
+      REGISTRY_AUTH_TOKEN_ISSUER: suxen-e2e-auth
+      REGISTRY_AUTH_TOKEN_REALM: http://registry-auth:8080/token
+      REGISTRY_AUTH_TOKEN_ROOTCERTBUNDLE: /auth/registry-token-cert.pem
+      REGISTRY_AUTH_TOKEN_SERVICE: suxen-e2e-registry
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    expose:
+      - "5000"
+    volumes:
+      - authenticated-registry-data:/var/lib/registry
+      - registry-auth-data:/auth:ro
+
+  raw-upstream:
+    build:
+      context: ../..
+      dockerfile: test/e2e/support/Dockerfile
+    command: ["raw-upstream"]
+    environment:
+      E2E_LISTEN: :8080
+      E2E_PASSWORD: upstream-password
+      E2E_STATE: /state
+      E2E_USERNAME: upstream
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/e2e-support", "health", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "${SUXEN_E2E_PUBLISH_ADDRESS:-127.0.0.1}::8080"
+    volumes:
+      - raw-upstream-data:/state
+
+  webhook-sink:
+    build:
+      context: ../..
+      dockerfile: test/e2e/support/Dockerfile
+    command: ["webhook-sink"]
+    environment:
+      E2E_LISTEN: :8080
+      E2E_SECRET: webhook-test-secret
+      E2E_STATE: /state
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/e2e-support", "health", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    ports:
+      - "${SUXEN_E2E_PUBLISH_ADDRESS:-127.0.0.1}::8080"
+    volumes:
+      - webhook-data:/state
+
+  suxen-a:
+    <<: *suxen
+
+  suxen-b:
+    <<: *suxen
+
+  suxen-c:
+    <<: *suxen
+
+  load-balancer:
+    build:
+      context: ./nginx
+    depends_on:
+      suxen-a:
+        condition: service_healthy
+      suxen-b:
+        condition: service_healthy
+      suxen-c:
+        condition: service_healthy
+    ports:
+      - "${SUXEN_E2E_PUBLISH_ADDRESS:-127.0.0.1}::8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+  migration-a:
+    <<: *suxen
+    profiles: ["migration-race"]
+    environment:
+      <<: *suxen-environment
+      SUXEN_DB: postgres://suxen:suxen-password@postgres:5432/suxen_race?sslmode=disable
+      SUXEN_PROVISION: ""
+
+  migration-b:
+    <<: *suxen
+    profiles: ["migration-race"]
+    environment:
+      <<: *suxen-environment
+      SUXEN_DB: postgres://suxen:suxen-password@postgres:5432/suxen_race?sslmode=disable
+      SUXEN_PROVISION: ""
+
+  migration-c:
+    <<: *suxen
+    profiles: ["migration-race"]
+    environment:
+      <<: *suxen-environment
+      SUXEN_DB: postgres://suxen:suxen-password@postgres:5432/suxen_race?sslmode=disable
+      SUXEN_PROVISION: ""
+
+volumes:
+  authenticated-registry-data: {}
+  minio-data: {}
+  postgres-data: {}
+  raw-upstream-data: {}
+  registry-auth-data: {}
+  registry-data: {}
+  webhook-data: {}

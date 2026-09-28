@@ -1,0 +1,24 @@
+apiVersion: suxen.io/v1
+resources:
+  # Two hosted raw repositories and a role that can write to both. The README
+  # and test then create a scoped user + token to show access enforcement.
+  # (The user is created out-of-band, not here, so no password is committed.)
+  - kind: repository
+    name: app
+    spec:
+      format: raw
+      type: hosted
+
+  - kind: repository
+    name: logs
+    spec:
+      format: raw
+      type: hosted
+
+  - kind: role
+    name: writer
+    spec:
+      description: Write to the app and logs repositories
+      privileges:
+        - repository:app:write
+        - repository:logs:write

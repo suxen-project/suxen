@@ -1,0 +1,21 @@
+# A dedicated support stack for the webhooks example: a small HMAC-verifying
+# receiver that records the events suxen delivers. suxen runs natively; only the
+# receiver is containerized. The receiver is the same support binary the e2e
+# suite uses (webhook-sink): it exposes POST /webhook, GET/DELETE /events.
+services:
+  webhook-sink:
+    build:
+      context: ../..
+      dockerfile: test/e2e/support/Dockerfile
+    command: ["webhook-sink"]
+    environment:
+      E2E_LISTEN: :8080
+      E2E_SECRET: example-webhook-secret
+      E2E_STATE: /state
+    ports:
+      - "127.0.0.1:9080:8080"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/e2e-support", "health", "http://127.0.0.1:8080/healthz"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

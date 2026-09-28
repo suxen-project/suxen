@@ -1,0 +1,14 @@
+/bin/
+/data/
+/dist/
+/.codex-scaleout-cache/
+/.codex-scaleout-tmp/
+*.db
+*.db-shm
+*.db-wal
+
+# examples launcher build cache
+examples/.bin/
+
+# opt-in, host-specific capacity results
+test/capacity/results/

@@ -1,0 +1,460 @@
+name: public-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned Helm
+        run: |
+          scripts/install-ci-helm.sh "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Source, race, UI, build-tag, and external-plugin checks
+        env:
+          # Race only the source packages here; the storage packages race in the
+          # storage-backends job with their services, avoiding a second
+          # internal/server race run.
+          SUXEN_CI_RACE_SPLIT: "1"
+        run: |
+          # The canonical GitHub gate includes Chrome and requires the browser
+          # contract; auxiliary CI environments may use a minimal container.
+          if [[ "${GITHUB_SERVER_URL}" == "https://github.com" ]]; then
+            export SUXEN_REQUIRE_BROWSER_TEST=1
+          fi
+          make check
+      - name: Reject credential material
+        run: scripts/check-public-tree.sh
+      - name: Build binaries
+        run: |
+          make build build-noui build-noplugins
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go test -c -o "${RUNNER_TEMP}/blob-windows-amd64.test.exe" ./internal/blob
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go test -c -o "${RUNNER_TEMP}/blob-windows-arm64.test.exe" ./internal/blob
+      - name: Lint chart
+        run: |
+          helm lint charts/suxen
+          scripts/check-helm-render.sh
+
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: github.server_url == 'https://github.com'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned Helm
+        run: |
+          scripts/install-ci-helm.sh "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Build and verify every release artifact
+        run: |
+          scripts/check-public-packages-test.sh
+          scripts/check-release-tag-test.sh
+          scripts/promote-release-images-test.sh
+          scripts/build-release-artifacts.sh 1.0.0-rc.1 dist
+          execution_targets=native
+          if [[ "${GITHUB_SERVER_URL}" == "https://github.com" ]]; then
+            execution_targets=amd64,arm64
+          fi
+          SUXEN_RELEASE_EXECUTE_LINUX_TARGETS="${execution_targets}" \
+            scripts/check-release-artifacts.sh 1.0.0-rc.1 dist
+
+  windows-filesystem:
+    # Auxiliary Actions implementations may try to reserve a runner before
+    # evaluating a job-level condition. Route those runs to their Linux pool
+    # and make the native evidence steps GitHub-only.
+    runs-on: ${{ github.server_url == 'https://github.com' && 'windows-latest' || 'ubuntu-latest' }}
+    steps:
+      - if: github.server_url != 'https://github.com'
+        run: echo "Native Windows evidence runs only on canonical GitHub CI"
+      - if: github.server_url == 'https://github.com'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: github.server_url == 'https://github.com'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Exercise filesystem upload durability natively
+        if: github.server_url == 'https://github.com'
+        shell: bash
+        run: |
+          go test ./internal/blob -run '^(TestFSPutGetAndDeduplicate|TestFSUploadSessionLifecycleAndLimitRollback)$' -count=1
+          go test ./internal/content -run '^TestStaging' -count=1
+
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - if: github.server_url == 'https://github.com'
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+      - name: Build and boot the runtime and SDK-derived images
+        run: |
+          platforms=(linux/amd64)
+          if [[ "${GITHUB_SERVER_URL}" == "https://github.com" ]]; then
+            platforms+=(linux/arm64)
+          fi
+          scripts/smoke-release-images.sh ci "${platforms[@]}"
+
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install Bats
+        run: sudo apt-get update && sudo apt-get install --yes bats
+      - name: Run executable examples
+        run: |
+          # The canonical GitHub runner and release gate provide the network and
+          # filesystem topology required by the complete zero-skip suite.
+          if [[ "${GITHUB_SERVER_URL}" != "https://github.com" ]]; then
+            echo "Executable examples run on the canonical GitHub workflow."
+            exit 0
+          fi
+          set -o pipefail
+          bats --formatter tap examples/*/test.bats | tee examples.tap
+          if grep -qi ' # skip ' examples.tap; then
+            echo 'Release example suite contains skipped scenarios.' >&2
+            exit 1
+          fi
+
+  interoperability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - id: cache-e2e-tools
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ runner.temp }}/suxen-e2e-tools
+          key: e2e-tools-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('test/e2e/install-ci-tools.sh') }}
+      - name: Install pinned clients
+        run: |
+          # The install script is not idempotent (unconditional download +
+          # `ln -s`), so on a cache hit reuse the restored tree instead of
+          # re-running it; the script otherwise prints this same bin directory.
+          tools_directory="${RUNNER_TEMP}/suxen-e2e-tools"
+          if [[ "${{ steps.cache-e2e-tools.outputs.cache-hit }}" == 'true' ]]; then
+            tools_path="${tools_directory}/bin"
+          else
+            tools_path="$(test/e2e/install-ci-tools.sh "${tools_directory}")"
+          fi
+          echo "${tools_path}" >> "${GITHUB_PATH}"
+      - name: Run complete client matrix without skips
+        env:
+          SUXEN_E2E_FULL: "1"
+        run: make test-interop
+
+  storage-backends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Start backend services
+        run: |
+          set -euo pipefail
+          minio_image="suxen-ci-minio:${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "MINIO_TEST_IMAGE=${minio_image}" >> "${GITHUB_ENV}"
+          docker build --target minio --tag "${minio_image}" test/support/minio
+          docker_network_args=()
+          postgres_alias_args=()
+          minio_alias_args=()
+          gcs_alias_args=()
+          postgres_publish_args=(--publish 5432:5432)
+          minio_publish_args=(--publish 9000:9000)
+          gcs_publish_args=(--publish 4443:4443)
+          minio_host=127.0.0.1
+          gcs_host=127.0.0.1
+          postgres_host=127.0.0.1
+          if job_network="$(docker inspect \
+            --format '{{range $name, $_ := .NetworkSettings.Networks}}{{$name}}{{end}}' \
+            "${HOSTNAME}" 2>/dev/null)" && [[ -n "${job_network}" ]]; then
+            docker_network_args=(--network "${job_network}")
+            postgres_alias_args=(--network-alias postgres)
+            minio_alias_args=(--network-alias minio)
+            gcs_alias_args=(--network-alias fake-gcs)
+            postgres_publish_args=()
+            minio_publish_args=()
+            gcs_publish_args=()
+            minio_host=minio
+            gcs_host=fake-gcs
+            postgres_host=postgres
+          fi
+
+          postgres_container_id="$(docker run --detach --rm \
+            "${docker_network_args[@]}" "${postgres_alias_args[@]}" "${postgres_publish_args[@]}" \
+            --env POSTGRES_DB=suxen_test \
+            --env POSTGRES_USER=suxen_test \
+            --env POSTGRES_PASSWORD=suxen_test_password \
+            postgres:18-alpine@sha256:6c538e7206ea40ff740ef27883529390a690b6ead6ba96b44c67a9f7c638e8fd)"
+          minio_container_id="$(docker run --detach --rm \
+            "${docker_network_args[@]}" "${minio_alias_args[@]}" "${minio_publish_args[@]}" \
+            --env MINIO_ROOT_USER=minioadmin --env MINIO_ROOT_PASSWORD=minioadmin \
+            "${minio_image}" \
+            server /data)"
+          gcs_container_id="$(docker run --detach --rm \
+            "${docker_network_args[@]}" "${gcs_alias_args[@]}" "${gcs_publish_args[@]}" \
+            fsouza/fake-gcs-server:1.52.3@sha256:666f86b873120818b10a5e68d99401422fcf8b00c1f27fe89599c35236f48b4c \
+            -scheme http -port 4443)"
+          echo "POSTGRES_CONTAINER_ID=${postgres_container_id}" >> "${GITHUB_ENV}"
+          echo "MINIO_CONTAINER_ID=${minio_container_id}" >> "${GITHUB_ENV}"
+          echo "GCS_CONTAINER_ID=${gcs_container_id}" >> "${GITHUB_ENV}"
+          echo "SUXEN_TEST_POSTGRES=postgres://suxen_test:suxen_test_password@${postgres_host}:5432/suxen_test?sslmode=disable" >> "${GITHUB_ENV}"
+          echo "SUXEN_TEST_S3=s3://suxen-ci?region=us-east-1&endpoint=http%3A%2F%2F${minio_host}%3A9000&pathStyle=true" >> "${GITHUB_ENV}"
+          echo "SUXEN_TEST_GCS=gcs://suxen-test?endpoint=http%3A%2F%2F${gcs_host}%3A4443" >> "${GITHUB_ENV}"
+
+          for attempt in $(seq 1 30); do
+            if docker exec "${postgres_container_id}" pg_isready \
+                 --username suxen_test --dbname suxen_test >/dev/null && \
+               curl --fail --silent "http://${minio_host}:9000/minio/health/ready" >/dev/null && \
+               curl --fail --silent "http://${gcs_host}:4443/storage/v1/b" >/dev/null; then
+              curl --fail --silent --show-error \
+                --header 'Content-Type: application/json' \
+                --data '{"name":"suxen-test"}' \
+                "http://${gcs_host}:4443/storage/v1/b?project=suxen-ci" >/dev/null
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs "${postgres_container_id}"
+          docker logs "${minio_container_id}"
+          docker logs "${gcs_container_id}"
+          exit 1
+      - name: Exercise PostgreSQL, S3, GCS, and cluster contracts
+        env:
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_REGION: us-east-1
+        run: make test-race-storage
+      - name: Show backend logs after a failure
+        if: ${{ failure() }}
+        run: |
+          docker logs "${POSTGRES_CONTAINER_ID}" || true
+          docker logs "${MINIO_CONTAINER_ID}" || true
+          docker logs "${GCS_CONTAINER_ID}" || true
+      - name: Stop backend services
+        if: ${{ always() }}
+        run: |
+          docker stop "${POSTGRES_CONTAINER_ID}" "${MINIO_CONTAINER_ID}" \
+            "${GCS_CONTAINER_ID}" >/dev/null 2>&1 || true
+          docker image rm "${MINIO_TEST_IMAGE}" >/dev/null 2>&1 || true
+
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Scan Go dependencies
+        run: |
+          # Pin a revision that understands the Go syntax used by go.mod's
+          # toolchain; v1.1.4 predates it and panics while building SSA.
+          go install golang.org/x/vuln/cmd/govulncheck@709015412431dd2b5b28a53c06c70bc02d49074c
+          govulncheck ./...
+      - name: Build container
+        run: |
+          docker build --tag suxen:scan .
+          docker build --build-arg VERSION=scan --tag suxen-sdk:scan --file sdk/Dockerfile .
+      - name: Scan containers
+        run: |
+          for image in suxen:scan suxen-sdk:scan; do
+            docker run --rm \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              docker.io/aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969 \
+              image --scanners vuln --format table --exit-code 1 \
+              --severity CRITICAL,HIGH "${image}"
+          done
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [source, release-contract, windows-filesystem, sdk, examples, interoperability, storage-backends, vulnerability-scan]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install pinned Helm
+        run: |
+          scripts/install-ci-helm.sh "${RUNNER_TEMP}/bin"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+      - name: Require a GitHub-verified annotated tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/check-release-tag.sh "${GITHUB_REPOSITORY}" "${GITHUB_REF_NAME}"
+      - name: Build versioned archives and checksums
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          scripts/build-release-artifacts.sh "${version}" dist
+          scripts/check-release-artifacts.sh "${version}" dist
+      - uses: sigstore/cosign-installer@3454372f43399081ed03b604cb2d021dabca52bb # v3.8.2
+      - name: Sign checksums
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - id: image
+        name: Publish and sign image
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/suxen"
+          metadata_file="${RUNNER_TEMP}/image-metadata.json"
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --build-arg VERSION="${version}" \
+            --tag "${image}:${version}" \
+            --metadata-file "${metadata_file}" \
+            --provenance=mode=max \
+            --push .
+          digest="$(jq -r '."containerimage.digest"' "${metadata_file}")"
+          test "${digest}" != null
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          cosign sign --yes "${image}@${digest}"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/suxen
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+      - id: sdk-image
+        name: Publish and sign SDK image
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/suxen-sdk"
+          metadata_file="${RUNNER_TEMP}/sdk-image-metadata.json"
+          docker buildx build --platform linux/amd64,linux/arm64 \
+            --file sdk/Dockerfile \
+            --build-arg VERSION="${version}" \
+            --tag "${image}:${version}" \
+            --metadata-file "${metadata_file}" \
+            --provenance=mode=max \
+            --push .
+          digest="$(jq -r '."containerimage.digest"' "${metadata_file}")"
+          test "${digest}" != null
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          cosign sign --yes "${image}@${digest}"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/suxen-sdk
+          subject-digest: ${{ steps.sdk-image.outputs.digest }}
+          push-to-registry: true
+      - id: chart
+        name: Publish and sign Helm chart
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          helm registry login ghcr.io --username "${GITHUB_ACTOR}" --password "${{ secrets.GITHUB_TOKEN }}"
+          digest="$(scripts/push-helm-chart.sh \
+            "dist/suxen-chart-${version}.tgz" \
+            "oci://ghcr.io/${GITHUB_REPOSITORY_OWNER}")"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+          cosign sign --yes "ghcr.io/${GITHUB_REPOSITORY_OWNER}/suxen-chart@${digest}"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/suxen-chart
+          subject-digest: ${{ steps.chart.outputs.digest }}
+          push-to-registry: true
+      - name: Require anonymous package access
+        run: |
+          scripts/check-public-packages.sh \
+            "${GITHUB_REF_NAME#v}" "${GITHUB_REPOSITORY_OWNER}"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flags=()
+          if [[ "${GITHUB_REF_NAME#v}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          if [[ "${GITHUB_REF_NAME}" == "v1.0.0-rc.1" ]]; then
+            flags+=(--notes-file CHANGELOG.md)
+          else
+            flags+=(--generate-notes)
+          fi
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" dist/* \
+              --verify-tag "${flags[@]}"
+          fi
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: suxen-release-verification
+      - name: Verify the public release without registry credentials
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUXEN_RELEASE_EXECUTE_LINUX_TARGETS: amd64,arm64
+        run: |
+          scripts/verify-published-release.sh \
+            "${GITHUB_REF_NAME#v}" "${GITHUB_REPOSITORY}"
+      - name: Restore registry credentials for stable promotion
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Promote verified stable images to latest
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          scripts/promote-release-images.sh \
+            "${GITHUB_REPOSITORY_OWNER}" \
+            "${{ steps.image.outputs.digest }}" \
+            "${{ steps.sdk-image.outputs.digest }}"

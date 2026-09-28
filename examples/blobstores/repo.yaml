@@ -1,0 +1,20 @@
+apiVersion: suxen.io/v1
+resources:
+  # A second, named blob store on the filesystem. A blob store's connection
+  # string is resolved server-side from a configurationRef (an env var or file),
+  # never inlined — start.sh sets SUXEN_ARCHIVE_URI to a path under the example
+  # data dir. The bootstrap `default` store (in-memory here) still exists.
+  - kind: blobStore
+    name: archive
+    spec:
+      driver: fs
+      configurationRef:
+        env: SUXEN_ARCHIVE_URI
+
+  # A repository whose bytes land in `archive` instead of `default`.
+  - kind: repository
+    name: cold
+    spec:
+      format: raw
+      type: hosted
+      blobStore: archive

@@ -1,0 +1,1 @@
+ALTER TABLE assets ADD COLUMN format_path TEXT NOT NULL DEFAULT '';

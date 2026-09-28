@@ -1,0 +1,22 @@
+{{- include "suxen.validateOCIEndpoints" . }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "suxen.fullname" . }}
+  labels:
+    {{- include "suxen.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+    {{- range (include "suxen.ociServicePorts" . | fromJson).items }}
+    - name: {{ required "OCI Service port name is required" .name }}
+      port: {{ required "OCI Service port is required" .port }}
+      targetPort: {{ default .name .targetPort }}
+      protocol: {{ default "TCP" .protocol }}
+    {{- end }}
+  selector:
+    {{- include "suxen.selectorLabels" . | nindent 4 }}

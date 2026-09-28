@@ -1,0 +1,39 @@
+# Dex identity provider for the OIDC example — an in-memory IdP with one static
+# user, exposing OpenID Connect discovery and the OAuth2 password grant.
+#
+# The issuer must be the URL clients (here, suxen) use to reach dex: the token's
+# `iss` and the discovery document are checked against it. suxen runs natively
+# and reaches this container on the published loopback port, so the issuer is
+# 127.0.0.1:5556, not a compose service name.
+issuer: http://127.0.0.1:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  # Let the local (static-password) connector answer the password grant, so a
+  # non-interactive client — CI, `docker login`, curl — can authenticate
+  # without a browser redirect.
+  passwordConnector: local
+  skipApprovalScreen: true
+
+staticClients:
+  - id: suxen
+    name: suxen
+    # A confidential client: suxen presents this secret at the token endpoint.
+    # It is provisioned into suxen via a secretRef, never inlined in repo.yaml.
+    secret: suxen-oidc-client-secret
+    redirectURIs:
+      - http://127.0.0.1/callback
+
+enablePasswordDB: true
+staticPasswords:
+  # Password is "alice-password" (bcrypt hash below). This user exists only in
+  # the IdP; suxen has no local account for it.
+  - email: alice@example.com
+    hash: "$2a$10$nYDeim4B9hjuGOgiwMtlrOyEctkCTrTxxe0kCtXdO9H45eq.jDpdu"
+    username: alice
+    userID: alice-id

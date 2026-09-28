@@ -1,0 +1,40 @@
+apiVersion: suxen.io/v1
+resources:
+  # Cache Maven Central.
+  - kind: repository
+    name: maven-proxy
+    spec:
+      format: maven
+      type: proxy
+      upstream: https://repo1.maven.org/maven2
+
+  # Host internal artifacts. versionPolicy gates what may be deployed:
+  # release (no -SNAPSHOT), snapshot (only -SNAPSHOT), or mixed (both, the
+  # default). A release repository refuses snapshots and vice versa.
+  - kind: repository
+    name: maven-hosted
+    spec:
+      format: maven
+      type: hosted
+      formatConfig:
+        versionPolicy: release
+
+  # One repository URL that serves internal artifacts and cached public ones.
+  - kind: repository
+    name: maven
+    spec:
+      format: maven
+      type: group
+      members:
+        - maven-hosted
+        - maven-proxy
+
+  # The development profile enables reads; deploying needs repository:maven-hosted:write.
+  # This role can be attached to a scoped user (see the README) so CI can deploy
+  # without the admin token.
+  - kind: role
+    name: maven-publisher
+    spec:
+      description: Deploy to the hosted Maven repository
+      privileges:
+        - repository:maven-hosted:write

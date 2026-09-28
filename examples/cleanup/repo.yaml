@@ -1,0 +1,15 @@
+apiVersion: suxen.io/v1
+resources:
+  # A cleanup policy deletes assets that match ALL of its criteria, keeping the
+  # newest `keepLast`. It runs on demand (an admin trigger) or on a schedule —
+  # never automatically on upload. Here it retains only the newest asset under
+  # the `cleanup/` prefix in the raw repository.
+  - kind: cleanupPolicy
+    name: raw-cleanup
+    spec:
+      repositories: [raw]
+      criteria:
+        - {path: "raw.path", op: "matches", value: "^cleanup/.*"}
+      keepLast: 1
+      action: delete
+      enabled: true

@@ -1,0 +1,10 @@
+.git
+bin
+data
+dist
+.codex-scaleout-cache
+.codex-scaleout-tmp
+examples/.bin
+*.db
+*.db-shm
+*.db-wal

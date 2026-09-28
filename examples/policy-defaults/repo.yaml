@@ -1,0 +1,38 @@
+apiVersion: suxen.io/v1
+resources:
+  # The instance-wide default download gate. It is the singleton `downloadGate`
+  # named `default` (a reserved name), and every repository inherits it unless it
+  # opts out. Here it withholds any asset until it carries scan.status=passed — a
+  # scan requirement declared once for the whole instance rather than per repository.
+  - kind: downloadGate
+    name: default
+    spec:
+      criteria:
+        - {path: "scan.status", op: "=", value: "passed"}
+      enabled: true
+
+  # Inherits the default and has no gate of its own: gated by the default alone.
+  - kind: repository
+    name: strict
+    spec: {format: raw, type: hosted}
+
+  # Has its own gate AND inherits the default: a provisioned repository gate
+  # inherits by default, so both sets of criteria must pass (scan AND review).
+  - kind: repository
+    name: reviewed
+    spec: {format: raw, type: hosted}
+  - kind: downloadGate
+    name: reviewed
+    spec:
+      criteria:
+        - {path: "review.status", op: "=", value: "approved"}
+      enabled: true
+
+  # Opts out of the default at runtime (see the README / test): a repository gate
+  # with inheritGlobal=false uses only its own criteria, and an empty criteria
+  # list then gates nothing. inheritGlobal is a runtime-only flag (a provisioned
+  # gate always inherits), so `open` starts with no gate and is opted out via the
+  # API.
+  - kind: repository
+    name: open
+    spec: {format: raw, type: hosted}

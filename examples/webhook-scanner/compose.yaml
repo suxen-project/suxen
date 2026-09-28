@@ -1,0 +1,36 @@
+# Support stack for the webhook-scanner example, both services from the e2e
+# support image. Both use host networking so suxen (native) can deliver webhooks
+# to the scanner and the scanner can call the suxen API back — all on loopback.
+services:
+  # The "scanner": receives asset.uploaded webhooks and stamps scan.status=passed
+  # back onto the asset through the suxen API, using a scoped service-account
+  # token (repository:*:annotate). This is the supported webhook->attribute
+  # integration; suxen does not read attributes from the webhook response.
+  scanner:
+    build:
+      context: ../..
+      dockerfile: test/e2e/support/Dockerfile
+    command: ["webhook-enricher"]
+    network_mode: host
+    environment:
+      E2E_LISTEN: ":9091"
+      E2E_SECRET: example-webhook-secret
+      E2E_ATTR_NAMESPACE: scan
+      E2E_ATTR_VALUE: '{"status":"passed"}'
+      SUXEN_URL: ${SUXEN_INTERNAL_URL:-http://127.0.0.1:8080}
+      SUXEN_TOKEN: ${SCANNER_TOKEN:-}
+
+  # A tiny upstream the `mirror` proxy fetches from, so the proxy case is
+  # hermetic. Serves the committed ./upstream files under /files, with basic auth.
+  upstream:
+    build:
+      context: ../..
+      dockerfile: test/e2e/support/Dockerfile
+    command: ["raw-upstream"]
+    network_mode: host
+    environment:
+      E2E_LISTEN: ":9092"
+      E2E_USERNAME: upstream
+      E2E_PASSWORD: upstream-password
+    volumes:
+      - ./upstream:/state/files:ro

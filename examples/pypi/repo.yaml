@@ -1,0 +1,35 @@
+apiVersion: suxen.io/v1
+resources:
+  # Cache the public PyPI simple index.
+  - kind: repository
+    name: pypi-proxy
+    spec:
+      format: pypi
+      type: proxy
+      upstream: https://pypi.org
+
+  # Accept internal publishes (twine upload).
+  - kind: repository
+    name: pypi-hosted
+    spec:
+      format: pypi
+      type: hosted
+
+  # One index serving internal distributions and cached public ones.
+  - kind: repository
+    name: pypi
+    spec:
+      format: pypi
+      type: group
+      members:
+        - pypi-hosted
+        - pypi-proxy
+
+  # Attach this role to a scoped user (see the README) so CI can publish without
+  # the admin account.
+  - kind: role
+    name: pypi-publisher
+    spec:
+      description: Publish to the hosted PyPI registry
+      privileges:
+        - repository:pypi-hosted:write

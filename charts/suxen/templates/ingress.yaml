@@ -1,0 +1,119 @@
+{{- include "suxen.validateOCIEndpoints" . }}
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "suxen.fullname" . }}
+  labels:
+    {{- include "suxen.labels" . | nindent 4 }}
+  annotations:
+    {{- toYaml .Values.ingress.annotations | nindent 4 }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    {{- range .Values.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ include "suxen.fullname" $ }}
+                port:
+                  name: http
+          {{- end }}
+    {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- $derived := include "suxen.ociDerivedEndpoints" . | fromJson }}
+{{- $mainHosts := include "suxen.ingressMainHosts" . | fromJson }}
+{{- $ociHosts := default dict .Values.ingress.ociHosts }}
+{{- $extraHosts := list }}
+{{- if gt (len $derived.hosts) 0 }}
+  {{- range $derived.hosts }}
+    {{- $host := . }}
+    {{- $overlay := index $ociHosts $host }}
+    {{- if and (not (index $mainHosts $host)) (or $.Values.ingress.enabled $overlay) }}
+      {{- $extraHosts = append $extraHosts $host }}
+    {{- end }}
+  {{- end }}
+{{- else }}
+  {{- range .Values.ingress.extraHosts }}
+    {{- $extraHosts = append $extraHosts . }}
+  {{- end }}
+{{- end }}
+{{- if gt (len $derived.hosts) 0 }}
+{{- range $index, $host := $extraHosts }}
+{{- $overlay := default dict (index $.Values.ingress.ociHosts $host) }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ printf "%s-oci-%d" (include "suxen.fullname" $) $index }}
+  labels:
+    {{- include "suxen.labels" $ | nindent 4 }}
+  annotations:
+    {{- with $overlay.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if $.Values.ingress.className }}
+  ingressClassName: {{ $.Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ $host | quote }}
+      http:
+        paths:
+          - path: {{ default "/" $overlay.path }}
+            pathType: {{ default "Prefix" $overlay.pathType }}
+            backend:
+              service:
+                name: {{ include "suxen.fullname" $ }}
+                port:
+                  name: {{ default "http" $overlay.servicePort }}
+  {{- with $overlay.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- else }}
+{{- range $index, $extra := $extraHosts }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ printf "%s-oci-%d" (include "suxen.fullname" $) $index }}
+  labels:
+    {{- include "suxen.labels" $ | nindent 4 }}
+  annotations:
+    {{- with $extra.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if $.Values.ingress.className }}
+  ingressClassName: {{ $.Values.ingress.className }}
+  {{- end }}
+  rules:
+    - host: {{ required "ingress.extraHosts[].host is required" $extra.host | quote }}
+      http:
+        paths:
+          - path: {{ default "/" $extra.path }}
+            pathType: {{ default "Prefix" $extra.pathType }}
+            backend:
+              service:
+                name: {{ include "suxen.fullname" $ }}
+                port:
+                  name: {{ default "http" $extra.servicePort }}
+  {{- with $extra.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}

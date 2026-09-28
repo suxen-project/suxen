@@ -1,0 +1,17 @@
+{
+  "operation": "npm-publish",
+  "target": "http://127.0.0.1:33017",
+  "requests": 4,
+  "succeeded": 4,
+  "payloadBytes": 251659368,
+  "concurrency": 4,
+  "elapsedMillis": 2550.997251,
+  "requestsPerSecond": 1.568014233818553,
+  "payloadMiBPerSecond": 94.08127572483569,
+  "p50Millis": 1857.063388,
+  "p95Millis": 2167.659882,
+  "maxMillis": 2167.659882,
+  "statuses": {
+    "201 Created": 4
+  }
+}

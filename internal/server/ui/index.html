@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>suxen repository manager</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/overview" aria-label="Suxen overview">
+      <span class="brand-mark" aria-hidden="true">sx</span>
+      <span><strong>suxen</strong><small>repository manager</small></span>
+    </a>
+    <div class="session-tools">
+      <form id="token-login" class="token-login" aria-label="API token sign in">
+        <label class="visually-hidden" for="token-input">API token</label>
+        <input id="token-input" type="password" autocomplete="off"
+               placeholder="Bootstrap or API token" required>
+        <button type="submit">Use token</button>
+      </form>
+      <div id="login-providers" class="login-providers" role="group" aria-label="Sign in" hidden></div>
+      <span id="identity-summary">Checking session…</span>
+      <button id="theme-toggle" class="secondary" type="button">Theme</button>
+      <button id="logout" class="secondary" type="button" hidden>Logout</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Administration">
+      <a href="#/overview" data-nav="overview">Overview</a>
+      <a href="#/repositories" data-nav="repositories">Repositories</a>
+      <a href="#/browse" data-nav="browse">Browse</a>
+      <a href="#/search" data-nav="search">Search</a>
+      <a href="#/blob-stores" data-nav="blob-stores">Blob stores</a>
+      <a href="#/cleanup-policies" data-nav="cleanup-policies">Cleanup policies</a>
+      <a href="#/users" data-nav="users">Users</a>
+      <a href="#/roles" data-nav="roles">Roles</a>
+      <a href="#/oidc-providers" data-nav="oidc-providers">OIDC providers</a>
+      <a href="#/webhooks" data-nav="webhooks">Webhooks</a>
+      <a href="#/defaults" data-nav="defaults">Defaults</a>
+      <a href="#/tasks" data-nav="tasks">Tasks &amp; GC</a>
+    </nav>
+
+    <main>
+      <div id="notice" class="notice" role="status" hidden>
+        <span id="notice-message"></span>
+        <button id="dismiss-notice" class="text-button" type="button">Dismiss</button>
+      </div>
+      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb"></nav>
+      <section id="app-view" class="view" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <dialog id="resource-dialog" class="editor-dialog"
+          aria-labelledby="resource-dialog-title"
+          aria-describedby="resource-dialog-description form-error">
+    <form id="resource-form" novalidate>
+      <div class="dialog-heading">
+        <div>
+          <p class="eyebrow">Resource editor</p>
+          <h2 id="resource-dialog-title">Edit resource</h2>
+          <p id="resource-dialog-description"></p>
+        </div>
+        <button id="close-resource-dialog" class="text-button" type="button">Close</button>
+      </div>
+      <div id="resource-fields" class="form-grid"></div>
+      <details id="advanced-editor" class="advanced-editor">
+        <summary>Advanced: edit as JSON</summary>
+        <label for="advanced-json">Resource JSON</label>
+        <textarea id="advanced-json" rows="18" spellcheck="false"></textarea>
+      </details>
+      <div id="form-error" class="inline-error" role="alert" hidden></div>
+      <div class="dialog-actions">
+        <button id="delete-resource" class="danger" type="button" hidden>Delete</button>
+        <span class="dialog-spacer"></span>
+        <button id="cancel-resource-dialog" class="secondary" type="button">Cancel</button>
+        <button id="save-resource" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="confirm-dialog"
+          aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <form method="dialog">
+      <h2 id="confirm-title">Confirm action</h2>
+      <p id="confirm-message"></p>
+      <div class="dialog-actions">
+        <span class="dialog-spacer"></span>
+        <button value="cancel" class="secondary">Cancel</button>
+        <button id="confirm-action" value="confirm" class="danger">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="secret-dialog" class="secret-dialog"
+          aria-labelledby="secret-title" aria-describedby="secret-description">
+    <h2 id="secret-title">Generated secret</h2>
+    <p id="secret-description">This value is shown once. Copy it before closing.</p>
+    <pre id="secret-value" class="secret-value"></pre>
+    <div class="dialog-actions">
+      <span class="dialog-spacer"></span>
+      <button id="copy-secret" class="secondary" type="button">Copy</button>
+      <button id="close-secret" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>

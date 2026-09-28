@@ -1,0 +1,12 @@
+run_started=2026-09-20T19:14:08Z
+kernel=Linux 7.2.4-arch1-2 x86_64 GNU/Linux
+cpu_count=24
+cpu_model=13th Gen Intel(R) Core(TM) i7-13700HX
+host_mem_total_kib=65488444
+runner_cgroup_memory_max=max
+docker_client=29.8.0 docker_server=29.8.0
+docker_cpus=24 docker_memory_bytes=67060166656
+go version go1.27.1-X:nodwarf5 linux/amd64
+git_head=ea7e9defde2ddc67f179a30c25f7988eed6a6ce9
+git_status_sha256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+resource_sampling_target_interval=0.2s (docker exec overhead extends the effective interval)

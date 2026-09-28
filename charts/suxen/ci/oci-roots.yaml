@@ -1,0 +1,35 @@
+provisioning:
+  enabled: true
+  document: |
+    apiVersion: suxen.io/v1
+    resources:
+      - kind: repository
+        name: docker
+        spec:
+          format: oci
+          type: hosted
+          endpoints:
+            hosts:
+              - registry.example.com
+            ports:
+              - 5000
+      - kind: repository
+        name: images
+        spec:
+          format: oci
+          type: hosted
+          endpoints:
+            hosts:
+              - images.example.com
+
+ingress:
+  enabled: true
+  hosts:
+    - host: suxen.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  ociHosts:
+    registry.example.com:
+      tls:
+        - secretName: suxen-registry-tls

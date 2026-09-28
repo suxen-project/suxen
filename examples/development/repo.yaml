@@ -1,0 +1,7 @@
+apiVersion: suxen.io/v1
+resources:
+  - kind: role
+    name: anonymous
+    spec:
+      description: Public reads for the loopback-only ephemeral example profile
+      privileges: [repository:*:read]
