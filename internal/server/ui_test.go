@@ -3,17 +3,14 @@
 package server
 
 import (
-	"bytes"
-	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/suxen-project/suxen/internal/config"
 )
@@ -94,25 +91,54 @@ func TestAdministrationUIRendersInBrowser(t *testing.T) {
 	t.Parallel()
 	browser := chromiumExecutable(t)
 	fixture := newServerFixture(t)
-	server := httptest.NewServer(fixture.Handler)
-	t.Cleanup(server.Close)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	profile := filepath.Join(t.TempDir(), "profile")
-	command := exec.CommandContext(ctx, browser,
-		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-		"--virtual-time-budget=3000", "--user-data-dir="+profile, "--dump-dom",
-		server.URL+"/ui/#/overview",
-	)
-	output, err := command.CombinedOutput()
-	if err != nil {
-		t.Fatalf("run browser: %v\n%s", err, output)
-	}
-	rendered := string(output)
-	for _, expected := range []string{"Anonymous session", "Repository operations", "Storage statistics require admin:stats:read."} {
-		if !strings.Contains(rendered, expected) {
-			t.Fatalf("browser DOM did not contain %q:\n%s", expected, rendered)
+	result := make(chan string, 1)
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/browser-render-probe-result":
+			select {
+			case result <- r.URL.Query().Get("status"):
+			default:
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "/browser-render-probe.js":
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+			_, _ = io.WriteString(w, `const expected = [
+  "Anonymous session", "Repository operations",
+  "Storage statistics require admin:stats:read."
+];
+let reported = false;
+const report = (status) => {
+  if (reported) return;
+  reported = true;
+  fetch("/browser-render-probe-result?status=" + encodeURIComponent(status));
+};
+const missing = () => expected.filter((text) => !document.body.innerText.includes(text));
+const observer = new MutationObserver(() => {
+  if (missing().length === 0) { observer.disconnect(); report("passed"); }
+});
+observer.observe(document.body, {subtree: true, childList: true, characterData: true});
+if (missing().length === 0) { observer.disconnect(); report("passed"); }
+setTimeout(() => report("missing: " + missing().join(", ")), 5000);`)
+		case "/ui/":
+			recorded := httptest.NewRecorder()
+			fixture.Handler.ServeHTTP(recorded, r)
+			for name, values := range recorded.Header() {
+				for _, value := range values {
+					w.Header().Add(name, value)
+				}
+			}
+			w.Header().Del("Content-Length")
+			w.WriteHeader(recorded.Code)
+			page := strings.Replace(recorded.Body.String(), "</body>", `<script src="/browser-render-probe.js"></script></body>`, 1)
+			_, _ = io.WriteString(w, page)
+		default:
+			fixture.Handler.ServeHTTP(w, r)
 		}
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	if got := runBrowserUntilResult(t, browser, server.URL+"/ui/#/overview", result); got != "passed" {
+		t.Fatalf("browser administration UI rendering: %s", got)
 	}
 }
 
@@ -149,44 +175,43 @@ func TestArtifactScriptsCannotExecuteInAdministrationOrigin(t *testing.T) {
 		upload.Body.Close()
 	}
 
+	result := make(chan string, 1)
+	var requested atomic.Uint32
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/artifact-isolation-probe" {
+		switch r.URL.Path {
+		case "/artifact-isolation-probe-result":
+			select {
+			case result <- r.URL.Query().Get("status"):
+			default:
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "/artifact-isolation-probe":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = io.WriteString(w, `<!doctype html><body data-probe="ready">
 <iframe src="/repository/raw/browser/explicit.html"></iframe>
 <iframe src="/repository/raw/browser/image.svg"></iframe>
-<script>setTimeout(() => document.querySelectorAll("iframe").forEach((frame) => frame.remove()), 1000)</script>
+<script>setTimeout(() => {
+  const status = document.body.dataset.artifactExecuted ? "failed" : "passed";
+  fetch("/artifact-isolation-probe-result?status=" + status);
+}, 1500)</script>
 </body>`)
-			return
+		case "/repository/raw/browser/explicit.html":
+			requested.Or(1)
+			fixture.Handler.ServeHTTP(w, r)
+		case "/repository/raw/browser/image.svg":
+			requested.Or(2)
+			fixture.Handler.ServeHTTP(w, r)
+		default:
+			fixture.Handler.ServeHTTP(w, r)
 		}
-		fixture.Handler.ServeHTTP(w, r)
 	})
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	// Chromium keeps a download job alive for attachment responses even after
-	// it has emitted --dump-dom. Bound that expected wait and inspect only the
-	// rendered DOM on stdout.
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
-	defer cancel()
-	profile := filepath.Join(t.TempDir(), "profile")
-	command := exec.CommandContext(ctx, browser,
-		"--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-		"--virtual-time-budget=3000", "--user-data-dir="+profile, "--dump-dom",
-		server.URL+"/artifact-isolation-probe",
-	)
-	var output bytes.Buffer
-	command.Stdout = &output
-	command.Stderr = io.Discard
-	err := command.Run()
-	if err != nil && ctx.Err() != context.DeadlineExceeded {
-		t.Fatalf("run browser: %v\n%s", err, output.String())
+	if got := runBrowserUntilResult(t, browser, server.URL+"/artifact-isolation-probe", result); got != "passed" {
+		t.Fatalf("artifact script executed with administration-origin access: %s", got)
 	}
-	rendered := output.String()
-	if !strings.Contains(rendered, `data-probe="ready"`) {
-		t.Fatalf("browser did not render the isolation probe:\n%s", rendered)
-	}
-	if strings.Contains(rendered, "data-artifact-executed") {
-		t.Fatalf("artifact script executed with administration-origin access:\n%s", rendered)
+	if got := requested.Load(); got != 3 {
+		t.Fatalf("browser fetched artifact types %b, want both HTML and SVG", got)
 	}
 }
 
