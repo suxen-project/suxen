@@ -66,8 +66,11 @@ test-noui:
 # target builds them and races the storage packages against the CI-provided
 # PostgreSQL, S3, and GCS services. Each integration test skips when its own
 # SUXEN_TEST_* service is not configured.
+# Keep the race packages sequential: internal/server launches Chromium while the
+# storage packages exercise PostgreSQL and object stores. Parallel package tests
+# can exhaust the memory of a standard GitHub runner and kill the browser.
 test-race-storage:
-	go test -race -count=1 -tags=suxen_integration $(STORAGE_RACE_PACKAGES)
+	go test -race -p 1 -count=1 -tags=suxen_integration $(STORAGE_RACE_PACKAGES)
 
 test-interop:
 	test/e2e/run.sh

@@ -130,6 +130,11 @@ jobs:
           cache: true
       - name: Install Bats
         run: sudo apt-get update && sudo apt-get install --yes bats
+      - name: Build example binaries before the startup deadline
+        run: |
+          mkdir -p examples/.bin
+          (cd examples/plugin-memblob && go build -o ../.bin/suxen-mem ./cmd/suxen-custom)
+          go build -o examples/.bin/suxenctl ./cmd/suxenctl
       - name: Run executable examples
         run: |
           # The canonical GitHub runner and release gate provide the network and
