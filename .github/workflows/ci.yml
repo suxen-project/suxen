@@ -32,6 +32,7 @@ jobs:
           # storage-backends job with their services, avoiding a second
           # internal/server race run.
           SUXEN_CI_RACE_SPLIT: "1"
+          SUXEN_CI_UI_BROWSER_SPLIT: "1"
         run: |
           # The canonical GitHub gate includes Chrome and requires the browser
           # contract; auxiliary CI environments may use a minimal container.
@@ -284,7 +285,7 @@ jobs:
       - name: Exercise browser security and administration contracts
         env:
           SUXEN_REQUIRE_BROWSER_TEST: "1"
-        run: make test-browser
+        run: make test-browser test-ui-browser
 
   vulnerability-scan:
     runs-on: ubuntu-latest
