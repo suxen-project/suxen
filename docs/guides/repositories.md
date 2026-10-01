@@ -96,6 +96,36 @@ remain updateable so a repository can accept new versions. Proxy cache refreshes
 unaffected. The setting does not revoke delete permission: a principal permitted to
 delete can remove an artifact before publishing its replacement.
 
+## Raw components
+
+A Raw path is otherwise just a file. To let classification and cleanup treat a
+payload and its side files as one version, declare ordered component patterns in
+`formatConfig.components`:
+
+```yaml
+formatConfig:
+  components:
+    - pattern: '^(?P<name>(models|tracks)/.+)/(?P<version>[0-9][^/]*)/[^/]+$'
+      anchor: '\.(glb|zip)$'
+    - pattern: '^(?P<name>client/alpha/[^/]+)/trackmaniac-(?P<version>[^/]+)-[^/]+\.zip$'
+```
+
+Each `pattern` is an RE2 expression with the named groups `name` and `version`; the
+optional `anchor` is an RE2 expression matched against the asset path. The first
+pattern that matches a path with a nonempty name and version sets the asset's
+`raw.component` and `raw.version` attributes. When the version capture is the whole
+parent directory name, as in `models/blocksets/core/0.2.0/core.glb`, every file in
+that directory belongs to one version for cleanup. With an `anchor`, only a matching
+file can establish that version, so a directory holding only `SHA256SUMS` is not a
+version. When the version is part of a file name, each file is its own version.
+Paths that match no pattern keep the default behavior: they have no component
+attributes, group by parent directory, and are cleaned up file by file.
+
+Changing the patterns reclassifies the repository's existing assets in the same
+transaction. Raw groups reject `formatConfig`. See
+[classification and cleanup](classification-cleanup.md#raw-component-retention) for
+retention examples.
+
 ## OCI registry roots
 
 Every OCI repository is reachable at `/repository/<name>/v2/` on the primary listen

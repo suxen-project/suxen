@@ -140,6 +140,13 @@ complete stored URL, including credentials and query parameters redacted by `GET
 An explicit upstream URL replaces URL credentials but must retain the existing
 endpoint (including its query). Do not send a redacted `GET` URL back unchanged.
 
+Raw hosted and proxy repositories accept `formatConfig.components`, the ordered
+component patterns described in
+[Raw components](../guides/repositories.md#raw-components). Invalid patterns return
+HTTP 400 with `invalid_format_config`. Cleanup policies accept `order`
+(`updatedAt` or `version`); an omitted `order` is stored as `updatedAt`, including
+on `PUT`.
+
 User updates preserve omitted fields; an empty or omitted password leaves the
 existing password unchanged. Creating a user requires a nonempty password.
 Omitting `admin` preserves its current value within the update transaction, including

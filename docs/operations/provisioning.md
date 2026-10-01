@@ -95,6 +95,9 @@ Hosted repository specs accept `allowOverwrite: true` or `false`. Omission on cr
 uses the format default; omission on an existing repository preserves its value.
 See [replacing existing assets](../guides/repositories.md#replacing-existing-assets)
 for defaults, identical retries, and mutable index behavior.
+Raw repository specs accept `formatConfig.components`; see
+[Raw components](../guides/repositories.md#raw-components). Cleanup policy specs accept
+`order: updatedAt` (the default) or `order: version`.
 
 The built-in `raw` and `oci` repositories and the `anonymous` and `administrator` roles
 are creation defaults: Suxen creates them when absent and protects their managed records

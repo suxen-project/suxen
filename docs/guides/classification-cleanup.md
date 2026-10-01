@@ -77,7 +77,8 @@ Apply the rules and create a cleanup policy from a JSON document:
 ./bin/suxenctl task leader
 ```
 
-A policy contains `name`, `repositories`, `criteria`, `keepLast`, `action`, and `enabled`.
+A policy contains `name`, `repositories`, `criteria`, `keepLast`, `order`, `action`,
+and `enabled`.
 Criteria are ordered `{path, op, value}` predicates over the projected attribute view;
 every predicate must match. Operators are `=`, `!=`, `<`, `<=`, `>`, `>=`, `before`,
 `after`, `matches`, `contains`, `in`, `not-in`, `exists`, and `absent`. Temporal values
@@ -110,6 +111,57 @@ match leaves the entire version alone. Timestamped SNAPSHOT builds in one
 (not only metadata, checksums, or signatures) to form a version unit. Standalone
 metadata uses ordinary retention within its own parent directory, including
 artifact-level indexes for artifact IDs ending in `-SNAPSHOT`.
+
+`order` decides which entries `keepLast` retains in each component. `updatedAt`, the
+default, keeps the most recently updated entries. `version` keeps the highest Raw
+component versions or OCI tags. Two versions that both parse as semantic versions,
+with or without a leading `v`, compare by semver precedence; otherwise they compare in
+natural order, so `build-10` follows `build-9`. Equal versions fall back to update
+time. With `version`, an entry without a version ranks below every versioned entry;
+formats without versions effectively keep `updatedAt` ordering.
+
+### Raw component retention
+
+A Raw repository with [component patterns](repositories.md#raw-components) groups
+matched assets by `raw.component`. A version directory is one unit: every file in it
+must match the policy, `keepLast` counts directories, and cleanup deletes the whole
+directory in one transaction. A file added or changed after selection keeps the entire
+directory. For example, with the `models` pattern and `.glb` anchor from the
+repositories guide, and these assets:
+
+```text
+models/blocksets/core/0.9.0/core.glb
+models/blocksets/core/0.9.0/SHA256SUMS
+models/blocksets/core/0.10.0/core.glb
+models/blocksets/core/0.10.0/SHA256SUMS
+models/blocksets/core/0.11.0/SHA256SUMS
+```
+
+a classification rule labels each payload and its checksums alike:
+
+```json
+{"rules": [{"when": [{"path": "raw.component", "op": "matches", "value": "^models/"}], "key": "kind", "value": "model"}]}
+```
+
+and this policy keeps only the highest complete model version:
+
+```json
+{
+  "name": "keep-latest-model",
+  "repositories": ["models"],
+  "criteria": [{"path": "classification.kind", "op": "=", "value": "model"}],
+  "keepLast": 1,
+  "order": "version",
+  "action": "delete",
+  "enabled": true
+}
+```
+
+Cleanup deletes both files of `0.9.0` and keeps `0.10.0`, even if `0.9.0` was uploaded
+later. `0.11.0` contains no anchor file, so it is not a version and does not take the
+retained slot; its checksum file follows ordinary retention within the component. If the
+criteria matched only `core.glb`, no directory would be complete and nothing would be
+deleted.
 
 ## Scheduling and garbage collection
 
