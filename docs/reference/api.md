@@ -143,7 +143,11 @@ endpoint (including its query). Do not send a redacted `GET` URL back unchanged.
 Raw hosted and proxy repositories accept `formatConfig.components`, the ordered
 component patterns described in
 [Raw components](../guides/repositories.md#raw-components). Invalid patterns return
-HTTP 400 with `invalid_format_config`. Cleanup policies accept `order`
+HTTP 400 with `invalid_format_config`. For such a repository,
+`GET /api/v1/repositories/{name}/components` returns one row per component version,
+with every member file in `assets`, using the same `limit` and `cursor` parameters and
+`repository:{name}:read` privilege as other repositories; unmatched paths are not
+listed. Cleanup policies accept `order`
 (`updatedAt` or `version`); an omitted `order` is stored as `updatedAt`, including
 on `PUT`.
 

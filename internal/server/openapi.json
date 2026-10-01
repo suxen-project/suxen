@@ -766,6 +766,7 @@
         "operationId": "browseRepositoryComponents",
         "x-suxen-required-privilege": "repository:{name}:read",
         "summary": "Browse bounded component-version rows from a repository",
+        "description": "A hosted or proxy Raw repository with formatConfig components returns one row per component version with its member assets, ordered by component and then highest version first; paths matching no component pattern and versions without an anchor file are omitted. Other repositories return one row per asset ordered by asset path.",
         "tags": ["Discovery"],
         "parameters": [
           {"$ref": "#/components/parameters/Limit"},
@@ -4842,6 +4843,22 @@
           "digest": {"type": "string"},
           "size": {"type": "integer", "format": "int64"},
           "kind": {"type": "string"},
+          "updatedAt": {"$ref": "#/components/schemas/Timestamp"},
+          "assets": {
+            "type": "array",
+            "description": "Present on Raw component version rows: every member file, ordered by path. The row's assetId, digest, and reference (the path) then describe its first anchor file, size is the total, and updatedAt the newest member update.",
+            "items": {"$ref": "#/components/schemas/RepositoryComponentAsset"}
+          }
+        }
+      },
+      "RepositoryComponentAsset": {
+        "type": "object",
+        "required": ["assetId", "path", "digest", "size", "updatedAt"],
+        "properties": {
+          "assetId": {"type": "integer", "format": "int64"},
+          "path": {"type": "string"},
+          "digest": {"type": "string"},
+          "size": {"type": "integer", "format": "int64"},
           "updatedAt": {"$ref": "#/components/schemas/Timestamp"}
         }
       },

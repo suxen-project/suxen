@@ -420,3 +420,57 @@ func TestRawComponentFileNamedUnitPreservedWhenSiblingAppears(t *testing.T) {
 	}
 	assertRawAssets(t, f, trackmaniacBuild("11150"), nil)
 }
+
+func TestRawComponentsListing(t *testing.T) {
+	f := newRawComponentFixture(t, rawComponentConfig(true))
+	putRawComponentAssets(t, f,
+		"models/blocksets/core/0.9.0/core.glb", "models/blocksets/core/0.9.0/SHA256SUMS",
+		"models/blocksets/core/0.10.0/core.glb", "models/blocksets/core/0.10.0/SHA256SUMS",
+		"models/blocksets/core/0.11.0/SHA256SUMS",
+		"client/alpha/linux/trackmaniac-1.4.0-x86_64.zip",
+		"docs/readme.txt",
+	)
+	type page struct {
+		Items      []repositoryComponentVersion `json:"items"`
+		NextCursor string                       `json:"nextCursor"`
+	}
+	var rows []repositoryComponentVersion
+	query := "?limit=1"
+	for pages := 0; ; pages++ {
+		if pages > 5 {
+			t.Fatal("listing did not terminate")
+		}
+		response := f.request(t, http.MethodGet, "/api/v1/repositories/"+rawComponentRepository+"/components"+query, nil, true)
+		assertStatus(t, response, http.StatusOK)
+		var decoded page
+		err := json.NewDecoder(response.Body).Decode(&decoded)
+		response.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows = append(rows, decoded.Items...)
+		if decoded.NextCursor == "" {
+			break
+		}
+		query = "?limit=1&cursor=" + decoded.NextCursor
+	}
+	var got []string
+	for _, row := range rows {
+		got = append(got, row.Component+"@"+row.Version)
+	}
+	want := []string{"client/alpha/linux@1.4.0", "models/blocksets/core@0.10.0", "models/blocksets/core@0.9.0"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("listed versions = %v, want %v", got, want)
+	}
+	latest := rows[1]
+	if len(latest.Assets) != 2 || latest.Assets[0].Path != "models/blocksets/core/0.10.0/SHA256SUMS" ||
+		latest.Reference != "models/blocksets/core/0.10.0/core.glb" || latest.Size != 2 || latest.UpdatedAt.IsZero() {
+		t.Fatalf("version row = %+v", latest)
+	}
+
+	unauthenticated := f.request(t, http.MethodGet, "/api/v1/repositories/"+rawComponentRepository+"/components", nil, false)
+	unauthenticated.Body.Close()
+	if unauthenticated.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated listing = %d", unauthenticated.StatusCode)
+	}
+}
