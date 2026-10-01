@@ -1356,14 +1356,32 @@ func (s *SQLStore) DeleteAssetsIfUnchanged(ctx context.Context, assets []domain.
 // The exclusive publication lock makes the directory scan complete on
 // PostgreSQL; SQLite's write transaction provides the same serialization.
 func (s *SQLStore) DeleteAssetsInDirectoryIfUnchanged(ctx context.Context, directory string, assets []domain.Asset) (bool, error) {
-	if len(assets) == 0 || !domain.ValidAssetPath(directory) {
+	if !domain.ValidAssetPath(directory) {
+		return false, nil
+	}
+	return s.DeleteAssetSetIfUnchanged(ctx, directory+"/", func(path string) bool {
+		return strings.HasPrefix(path, directory+"/") && !strings.Contains(strings.TrimPrefix(path, directory+"/"), "/")
+	}, assets)
+}
+
+// DeleteAssetSetIfUnchanged deletes a unit whose membership is a path
+// predicate: the stored paths under prefix accepted by member must equal the
+// supplied snapshot, and every row must be unchanged. It holds the same
+// publication lock as directory units so a new member cannot appear between
+// check and commit.
+func (s *SQLStore) DeleteAssetSetIfUnchanged(
+	ctx context.Context,
+	prefix string,
+	member func(path string) bool,
+	assets []domain.Asset,
+) (bool, error) {
+	if len(assets) == 0 {
 		return false, nil
 	}
 	repository := assets[0].Repository
 	want := make(map[string]int64, len(assets))
 	for _, asset := range assets {
-		if asset.Repository != repository || !strings.HasPrefix(asset.Path, directory+"/") ||
-			strings.Contains(strings.TrimPrefix(asset.Path, directory+"/"), "/") {
+		if asset.Repository != repository || !strings.HasPrefix(asset.Path, prefix) || !member(asset.Path) {
 			return false, nil
 		}
 		want[asset.Path] = asset.ID
@@ -1383,7 +1401,7 @@ func (s *SQLStore) DeleteAssetsInDirectoryIfUnchanged(ctx context.Context, direc
 	}
 	rows, err := tx.QueryContext(ctx,
 		`SELECT path, id FROM assets WHERE repository_id = (SELECT id FROM repositories WHERE name = ?) AND path LIKE ? ESCAPE '!'`,
-		repository, escapeLikePrefix(directory+"/")+"%")
+		repository, escapeLikePrefix(prefix)+"%")
 	if err != nil {
 		return false, err
 	}
@@ -1396,10 +1414,7 @@ func (s *SQLStore) DeleteAssetsInDirectoryIfUnchanged(ctx context.Context, direc
 			rows.Close()
 			return false, err
 		}
-		if !strings.HasPrefix(path, directory+"/") {
-			continue
-		}
-		if strings.Contains(strings.TrimPrefix(path, directory+"/"), "/") {
+		if !strings.HasPrefix(path, prefix) || !member(path) {
 			continue
 		}
 		seen++

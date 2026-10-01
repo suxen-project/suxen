@@ -57,9 +57,9 @@ func TestMatchDerivesDirectoryAndSingleFileVersions(t *testing.T) {
 		want Match
 		ok   bool
 	}{
-		{"models/blocksets/core/0.2.0/core.glb", Match{Name: "models/blocksets/core", Version: "0.2.0", Directory: "models/blocksets/core/0.2.0", Anchor: true}, true},
+		{"models/blocksets/core/0.2.0/core.glb", Match{Rule: 0, Name: "models/blocksets/core", Version: "0.2.0", Directory: "models/blocksets/core/0.2.0", Anchor: true}, true},
 		{"models/blocksets/core/0.2.0/SHA256SUMS", Match{Name: "models/blocksets/core", Version: "0.2.0", Directory: "models/blocksets/core/0.2.0"}, true},
-		{"client/alpha/linux/trackmaniac-1.4.0-x86_64.zip", Match{Name: "client/alpha/linux", Version: "1.4.0", Anchor: true}, true},
+		{"client/alpha/linux/trackmaniac-1.4.0-x86_64.zip", Match{Rule: 1, Name: "client/alpha/linux", Version: "1.4.0", Anchor: true}, true},
 		{"models/readme.txt", Match{}, false},
 		// An empty version capture does not match, so the asset keeps the defaults.
 		{"client/beta/.bin", Match{}, false},

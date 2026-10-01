@@ -24,6 +24,7 @@ const (
 
 // Rule is one compiled component pattern with its optional anchor.
 type Rule struct {
+	source  string
 	pattern *regexp.Regexp
 	anchor  *regexp.Regexp
 	name    int
@@ -35,6 +36,8 @@ type Rules []Rule
 
 // Match is the component identity a rule assigns to an asset path.
 type Match struct {
+	// Rule is the index of the matching rule; units never span rules.
+	Rule    int
 	Name    string
 	Version string
 	// Directory is the version directory when the version capture is the
@@ -115,7 +118,7 @@ func parseRule(entry any) (Rule, error) {
 	if err != nil {
 		return Rule{}, fmt.Errorf("invalid pattern: %w", err)
 	}
-	rule := Rule{pattern: pattern, name: pattern.SubexpIndex("name"), version: pattern.SubexpIndex("version")}
+	rule := Rule{source: source, pattern: pattern, name: pattern.SubexpIndex("name"), version: pattern.SubexpIndex("version")}
 	if rule.name < 0 || rule.version < 0 {
 		return Rule{}, errors.New("pattern must contain the named groups name and version")
 	}
@@ -145,7 +148,7 @@ func ForConfig(config map[string]any) Rules {
 // Match returns the component identity of the first rule matching assetPath.
 // A rule whose name or version capture is empty does not match.
 func (rules Rules) Match(assetPath string) (Match, bool) {
-	for _, rule := range rules {
+	for index, rule := range rules {
 		indexes := rule.pattern.FindStringSubmatchIndex(assetPath)
 		if indexes == nil {
 			continue
@@ -156,6 +159,7 @@ func (rules Rules) Match(assetPath string) (Match, bool) {
 			continue
 		}
 		match := Match{
+			Rule:    index,
 			Name:    assetPath[nameStart:nameEnd],
 			Version: assetPath[versionStart:versionEnd],
 			Anchor:  rule.anchor == nil || rule.anchor.MatchString(assetPath),
@@ -167,4 +171,24 @@ func (rules Rules) Match(assetPath string) (Match, bool) {
 		return match, true
 	}
 	return Match{}, false
+}
+
+// SameUnit reports whether two matches belong to one version unit: the same
+// rule, component, and version, and the same version directory if any.
+func SameUnit(left, right Match) bool {
+	return left.Rule == right.Rule && left.Name == right.Name &&
+		left.Version == right.Version && left.Directory == right.Directory
+}
+
+// ScanPrefix returns a path prefix shared by every asset that can match the
+// same unit as match. A rule whose pattern starts with the name group pins
+// the name to the path start; any other rule needs a full scan.
+func (rules Rules) ScanPrefix(match Match) string {
+	if match.Rule < 0 || match.Rule >= len(rules) {
+		return ""
+	}
+	if strings.HasPrefix(rules[match.Rule].source, "^(?P<name>") {
+		return match.Name
+	}
+	return ""
 }

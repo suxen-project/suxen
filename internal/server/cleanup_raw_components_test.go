@@ -334,3 +334,89 @@ func TestRawComponentConfigurationValidatedByAPI(t *testing.T) {
 		t.Fatalf("stored policy = %+v, %v", stored, err)
 	}
 }
+
+func trackmaniacConfig() map[string]any {
+	return map[string]any{"components": []any{map[string]any{
+		"pattern": `^(?P<name>client/alpha)/[^/]+/trackmaniac-(?P<version>[^/-]+)-[^/]+$`,
+		"anchor":  `\.zip$`,
+	}}}
+}
+
+func trackmaniacBuild(build string) []string {
+	var paths []string
+	for _, platform := range []string{"linux", "windows"} {
+		zip := "client/alpha/" + platform + "/trackmaniac-alpha." + build + "-x86_64.zip"
+		paths = append(paths, zip, zip+".sha256")
+	}
+	return paths
+}
+
+func TestRawComponentFileNamedVersionsFormOneUnitAcrossPlatforms(t *testing.T) {
+	f := newRawComponentFixture(t, trackmaniacConfig())
+	ctx := context.Background()
+	builds := []string{"11150", "11151", "11152", "11153"}
+	for _, build := range builds {
+		putRawComponentAssets(t, f, trackmaniacBuild(build)...)
+	}
+	// A checksum without its zip never forms a build, so it cannot take a slot.
+	orphan := "client/alpha/linux/trackmaniac-alpha.11160-x86_64.zip.sha256"
+	putRawComponentAssets(t, f, orphan)
+	policy := domain.CleanupPolicy{
+		Name: "keep-three-builds", KeepLast: 3, Order: domain.CleanupOrderVersion,
+		Criteria: domain.CleanupCriteria{{Path: "raw.component", Op: "=", Value: "client/alpha"}},
+	}
+	result, err := f.Handler.cleanupRepository(ctx, policy, rawComponentRepository, false, time.Now())
+	if err != nil || result.Deleted != 4 {
+		t.Fatalf("cleanup = %+v, %v", result, err)
+	}
+	var kept []string
+	for _, build := range builds[1:] {
+		kept = append(kept, trackmaniacBuild(build)...)
+	}
+	assertRawAssets(t, f, append(kept, orphan), trackmaniacBuild("11150"))
+}
+
+func TestRawComponentFileNamedUnitKeptWhenSideFileDoesNotMatch(t *testing.T) {
+	f := newRawComponentFixture(t, trackmaniacConfig())
+	ctx := context.Background()
+	paths := append(trackmaniacBuild("11150"), trackmaniacBuild("11151")...)
+	putRawComponentAssets(t, f, paths...)
+	policy := domain.CleanupPolicy{
+		Name: "zips-only", KeepLast: 1,
+		Criteria: domain.CleanupCriteria{{Path: "raw.path", Op: "matches", Value: `\.zip$`}},
+	}
+	result, err := f.Handler.cleanupRepository(ctx, policy, rawComponentRepository, false, time.Now())
+	if err != nil || result.Deleted != 0 {
+		t.Fatalf("cleanup = %+v, %v", result, err)
+	}
+	assertRawAssets(t, f, paths, nil)
+}
+
+func TestRawComponentFileNamedUnitPreservedWhenSiblingAppears(t *testing.T) {
+	f := newRawComponentFixture(t, trackmaniacConfig())
+	ctx := context.Background()
+	putRawComponentAssets(t, f, trackmaniacBuild("11150")...)
+	repository, err := f.Metadata.Repository(ctx, rawComponentRepository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := f.Metadata.ForRepository(repository).Assets(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retention, ok := rawRetention(repository)
+	if !ok {
+		t.Fatal("repository has no component rules")
+	}
+	prefix, member, ok := retention.unitMember(snapshot[0].Path)
+	if !ok {
+		t.Fatal("snapshot path is not a component member")
+	}
+	// A macOS build of the same version is published after selection.
+	putRawComponentAssets(t, f, "client/alpha/macos/trackmaniac-alpha.11150-arm64.zip")
+	deleted, err := f.Metadata.DeleteAssetSetIfUnchanged(ctx, prefix, member, snapshot)
+	if err != nil || deleted {
+		t.Fatalf("delete with new sibling = %t, %v", deleted, err)
+	}
+	assertRawAssets(t, f, trackmaniacBuild("11150"), nil)
+}

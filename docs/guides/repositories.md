@@ -117,7 +117,13 @@ pattern that matches a path with a nonempty name and version sets the asset's
 parent directory name, as in `models/blocksets/core/0.2.0/core.glb`, every file in
 that directory belongs to one version for cleanup. With an `anchor`, only a matching
 file can establish that version, so a directory holding only `SHA256SUMS` is not a
-version. When the version is part of a file name, each file is its own version.
+version. When the version is part of a file name, every asset that the same pattern
+assigns the same component and version is one version, wherever it is stored. For
+example, `^(?P<name>client/alpha)/[^/]+/trackmaniac-(?P<version>[^/-]+)-[^/]+$` with
+anchor `\.zip$` makes the Linux and Windows zips of one build, and their `.sha256`
+files, one version of `client/alpha`. The anchor applies the same way: files without
+a matching anchor sibling never form a version. A file-named version can have at most
+16 files; a larger one is never deleted by a policy.
 Paths that match no pattern keep the default behavior: they have no component
 attributes, group by parent directory, and are cleaned up file by file.
 

@@ -123,10 +123,10 @@ formats without versions effectively keep `updatedAt` ordering.
 ### Raw component retention
 
 A Raw repository with [component patterns](repositories.md#raw-components) groups
-matched assets by `raw.component`. A version directory is one unit: every file in it
-must match the policy, `keepLast` counts directories, and cleanup deletes the whole
-directory in one transaction. A file added or changed after selection keeps the entire
-directory. For example, with the `models` pattern and `.glb` anchor from the
+matched assets by `raw.component`. Each version is one unit, whether it is a version
+directory or a set of files named with the version: every file in it must match the
+policy, `keepLast` counts versions, and cleanup deletes the whole version in one
+transaction. A file added or changed after selection keeps the entire version. For example, with the `models` pattern and `.glb` anchor from the
 repositories guide, and these assets:
 
 ```text

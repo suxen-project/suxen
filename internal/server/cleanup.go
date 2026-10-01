@@ -586,8 +586,14 @@ func (s *Server) cleanupRepository(
 		return cleanupResult{}, err
 	}
 	grouping := repositoryRetentionGrouping(repository)
+	unitPaths := retentionUnitPaths(repository.Format)
+	raw, rawComponents := rawRetention(repository)
+	if rawComponents {
+		raw = raw.withFileUnits(assets)
+		unitPaths = raw
+	}
 	directoryUnits, remainingAssets := selectRetentionDirectoryUnits(policy, repository, grouping, repositoryRetentionUnitDirectory(repository), assets, now)
-	units, ordinaryAssets := selectRetentionUnits(policy, repository, grouping, retentionUnitPaths(repository.Format), remainingAssets, now)
+	units, ordinaryAssets := selectRetentionUnits(policy, repository, grouping, unitPaths, remainingAssets, now)
 	candidates, err := selectCleanupCandidates(policy, repository, grouping, ordinaryAssets, now)
 	if err != nil {
 		return cleanupResult{}, err
@@ -628,7 +634,17 @@ func (s *Server) cleanupRepository(
 			}
 			continue
 		}
-		deleted, err := s.metadata.DeleteAssetsIfUnchanged(ctx, unit)
+		var deleted bool
+		if rawComponents {
+			// A sibling published after selection joins the version, so the
+			// whole stored set must still equal the snapshot.
+			prefix, member, ok := raw.unitMember(unit[0].Path)
+			if ok {
+				deleted, err = s.metadata.DeleteAssetSetIfUnchanged(ctx, prefix, member, unit)
+			}
+		} else {
+			deleted, err = s.metadata.DeleteAssetsIfUnchanged(ctx, unit)
+		}
 		if err != nil {
 			return result, err
 		}
