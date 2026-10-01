@@ -46,15 +46,7 @@ func TestProxyPublicationMigrationPreservesPriorCacheOnBothDialects(t *testing.T
 		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE cleanup_policies DROP COLUMN retention_order`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := metadata.db.ExecContext(ctx, `DROP INDEX idx_assets_component`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE assets DROP COLUMN component`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE assets DROP COLUMN component_version`); err != nil {
-			t.Fatal(err)
-		}
+		dropAssetComponentSchema(t, metadata)
 		if err := metadata.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}

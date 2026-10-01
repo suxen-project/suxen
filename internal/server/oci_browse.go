@@ -58,7 +58,7 @@ func (s *Server) handleRepositoryComponents(
 		return
 	}
 	if retention, ok := rawRetention(repository); ok && repository.Type != "group" {
-		s.writeRawComponents(w, r, repository, retention.rules)
+		s.writeRawComponents(w, r, repository, retention.Rules)
 		return
 	}
 	sources, err := s.discoverySources(r.Context(), []domain.Repository{repository})

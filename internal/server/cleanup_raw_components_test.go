@@ -408,7 +408,7 @@ func TestRawComponentFileNamedUnitPreservedWhenSiblingAppears(t *testing.T) {
 	if !ok {
 		t.Fatal("repository has no component rules")
 	}
-	prefix, member, ok := retention.unitMember(snapshot[0].Path)
+	prefix, member, ok := retention.UnitMember(snapshot[0].Path)
 	if !ok {
 		t.Fatal("snapshot path is not a component member")
 	}

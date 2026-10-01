@@ -536,7 +536,7 @@ func relabelRepositoryTx(ctx context.Context, transaction *dialectTx, repository
 	if err != nil {
 		return err
 	}
-	if err := refreshComponentColumnsTx(ctx, transaction, repository.ID, repository.Format, repository.FormatConfig); err != nil {
+	if err := refreshDerivedColumnsTx(ctx, transaction, repository); err != nil {
 		return err
 	}
 	config, err := classificationFrom(ctx, transaction, repositoryName)
@@ -1157,40 +1157,50 @@ func parseOptionalTime(value sql.NullString) (*time.Time, error) {
 	return &parsed, nil
 }
 
-// refreshComponentColumnsTx recomputes the component columns of one
-// repository's assets. It reads only columns present since migration 16 so the
-// migration backfill can reuse it.
-func refreshComponentColumnsTx(
-	ctx context.Context,
-	transaction *dialectTx,
-	repositoryID string,
-	format string,
-	formatConfig map[string]any,
-) error {
-	query := `SELECT id, path, format_path, kind, reference, component, component_version
+// refreshDerivedColumnsTx recomputes the component and retention-group columns
+// of one repository's assets. It reads only columns present since migration 16
+// so the migration backfill can reuse it.
+func refreshDerivedColumnsTx(ctx context.Context, transaction *dialectTx, repository domain.Repository) error {
+	query := `SELECT id, path, format_path, digest, size, content_type, kind, reference,
+		updated_at, validated_at, component, component_version, retention_group
 		FROM assets WHERE repository_id = ? ORDER BY id`
 	if transaction.dialect == dialectPostgres {
 		query += ` FOR UPDATE`
 	}
-	rows, err := transaction.QueryContext(ctx, query, repositoryID)
+	rows, err := transaction.QueryContext(ctx, query, repository.ID)
 	if err != nil {
 		return err
 	}
 	type change struct {
-		id                 int64
-		component, version string
+		id                        int64
+		component, version, group string
 	}
 	var changes []change
 	for rows.Next() {
-		var asset domain.Asset
-		var component, version string
-		if err := rows.Scan(&asset.ID, &asset.Path, &asset.FormatPath, &asset.Kind, &asset.Reference, &component, &version); err != nil {
+		asset := domain.Asset{Repository: repository.Name}
+		var updatedAt string
+		var validatedAt sql.NullString
+		var component, version, group string
+		if err := rows.Scan(&asset.ID, &asset.Path, &asset.FormatPath, &asset.Digest, &asset.Size,
+			&asset.ContentType, &asset.Kind, &asset.Reference, &updatedAt, &validatedAt,
+			&component, &version, &group); err != nil {
 			rows.Close()
 			return err
 		}
-		wantComponent, wantVersion := storedComponent(asset, format, formatConfig)
-		if wantComponent != component || wantVersion != version {
-			changes = append(changes, change{id: asset.ID, component: wantComponent, version: wantVersion})
+		if asset.UpdatedAt, err = parseTime(updatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		asset.ValidatedAt = asset.UpdatedAt
+		if validatedAt.Valid {
+			if asset.ValidatedAt, err = parseTime(validatedAt.String); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		want := derivedAssetColumns(asset, repository)
+		if want.component != component || want.version != version || want.group != group {
+			changes = append(changes, change{id: asset.ID, component: want.component, version: want.version, group: want.group})
 		}
 	}
 	err = rows.Err()
@@ -1200,8 +1210,8 @@ func refreshComponentColumnsTx(
 	}
 	for _, update := range changes {
 		if _, err := transaction.ExecContext(ctx,
-			`UPDATE assets SET component = ?, component_version = ? WHERE id = ?`,
-			update.component, update.version, update.id,
+			`UPDATE assets SET component = ?, component_version = ?, retention_group = ? WHERE id = ?`,
+			update.component, update.version, update.group, update.id,
 		); err != nil {
 			return err
 		}
@@ -1209,42 +1219,40 @@ func refreshComponentColumnsTx(
 	return nil
 }
 
-// backfillAssetComponents fills the component columns added by migration 16.
-// Raw patterns are RE2 expressions stored as JSON, which SQL cannot evaluate,
-// so the backfill runs in Go inside the migration transaction.
+// backfillAssetComponents fills the derived columns added by migration 16 for
+// every repository. Raw patterns are RE2 expressions and retention groups may
+// come from format plugins, neither of which SQL can evaluate, so the backfill
+// runs in Go inside the migration transaction.
 func backfillAssetComponents(ctx context.Context, transaction *dialectTx) error {
 	rows, err := transaction.QueryContext(ctx,
-		`SELECT id, format, format_config FROM repositories WHERE format IN ('raw', 'oci') ORDER BY id`)
+		`SELECT id, name, format, type, upstream, allow_overwrite, format_config FROM repositories ORDER BY id`)
 	if err != nil {
 		return err
 	}
-	type target struct {
-		id, format string
-		config     map[string]any
-	}
-	var targets []target
+	var repositories []domain.Repository
 	for rows.Next() {
-		var repository target
+		var repository domain.Repository
+		var allowOverwrite bool
 		var encoded string
-		if err := rows.Scan(&repository.id, &repository.format, &encoded); err != nil {
+		if err := rows.Scan(&repository.ID, &repository.Name, &repository.Format, &repository.Type,
+			&repository.Upstream, &allowOverwrite, &encoded); err != nil {
 			rows.Close()
 			return err
 		}
-		if repository.config, err = decodeFormatConfig(encoded); err != nil {
+		repository.AllowOverwrite = &allowOverwrite
+		if repository.FormatConfig, err = decodeFormatConfig(encoded); err != nil {
 			rows.Close()
 			return err
 		}
-		if repository.format == "oci" || len(repository.config) > 0 {
-			targets = append(targets, repository)
-		}
+		repositories = append(repositories, repository)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return err
 	}
-	for _, repository := range targets {
-		if err := refreshComponentColumnsTx(ctx, transaction, repository.id, repository.format, repository.config); err != nil {
+	for _, repository := range repositories {
+		if err := refreshDerivedColumnsTx(ctx, transaction, repository); err != nil {
 			return err
 		}
 	}

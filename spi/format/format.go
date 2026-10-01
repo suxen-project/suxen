@@ -319,7 +319,10 @@ type RetentionGrouping interface {
 	// RetentionGroupKey returns the identity whose versions compete for
 	// keepLast — every release of one package shares a key. ok=false falls
 	// back to the host's default grouping for that asset; it does not force
-	// directory grouping onto assets the host groups specially.
+	// directory grouping onto assets the host groups specially. The host
+	// stores the key when the asset is written and recomputes it when the
+	// repository configuration changes, so it must depend only on the
+	// repository configuration and the asset's stored fields.
 	RetentionGroupKey(repository Repository, asset Asset) (key string, ok bool)
 
 	// CompanionPaths returns the repository-relative paths of the

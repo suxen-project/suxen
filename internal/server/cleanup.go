@@ -17,8 +17,9 @@ import (
 	"github.com/suxen-project/suxen/internal/controlplane"
 	"github.com/suxen-project/suxen/internal/domain"
 	"github.com/suxen-project/suxen/internal/httpx"
-	"github.com/suxen-project/suxen/internal/ocimodel"
 	"github.com/suxen-project/suxen/internal/predicate"
+	"github.com/suxen-project/suxen/internal/retention"
+	"github.com/suxen-project/suxen/internal/store"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 )
 
@@ -570,6 +571,116 @@ func (s *Server) runCleanupTask(
 	return task, runErr
 }
 
+// cleanupGroupPageSize bounds how many retention groups one index page reads.
+const cleanupGroupPageSize = 100
+
+// cleanupSelection is what one policy run deletes: whole directory units,
+// whole path units, and ordinary assets with their companions.
+type cleanupSelection struct {
+	directoryUnits []retentionUnit
+	units          [][]domain.Asset
+	candidates     []domain.Asset
+	// raw is the Raw component adapter when the repository declares patterns;
+	// its path units need a whole-set check at deletion.
+	raw           retention.RawComponents
+	rawComponents bool
+}
+
+// selectRepositoryCleanup runs the retention pipeline over assets: directory
+// units first, then path units on what they leave, then ordinary candidates.
+func selectRepositoryCleanup(
+	policy domain.CleanupPolicy,
+	repository domain.Repository,
+	assets []domain.Asset,
+	now time.Time,
+) (cleanupSelection, error) {
+	grouping := repositoryRetentionGrouping(repository)
+	unitPaths := retentionUnitPaths(repository.Format)
+	raw, rawComponents := rawRetention(repository)
+	if rawComponents {
+		raw = raw.WithFileUnits(assets)
+		unitPaths = raw
+	}
+	directoryUnits, remainingAssets := selectRetentionDirectoryUnits(policy, repository, grouping, repositoryRetentionUnitDirectory(repository), assets, now)
+	units, ordinaryAssets := selectRetentionUnits(policy, repository, grouping, unitPaths, remainingAssets, now)
+	candidates, err := selectCleanupCandidates(policy, repository, grouping, ordinaryAssets, now)
+	return cleanupSelection{
+		directoryUnits: directoryUnits, units: units, candidates: candidates,
+		raw: raw, rawComponents: rawComponents,
+	}, err
+}
+
+// selectGroupCleanup selects one stored retention group without reading the
+// rest of the repository. It loads the group's rows plus every direct child
+// of their directories and of their declared unit paths' directories: unit
+// membership and the claims that remove an asset from ordinary retention are
+// decided within those directories, and unit declarations are reciprocal, so
+// the pipeline over that closure selects exactly what a whole-repository run
+// selects for this group.
+func (s *Server) selectGroupCleanup(
+	ctx context.Context,
+	view store.RepositoryView,
+	policy domain.CleanupPolicy,
+	repository domain.Repository,
+	group string,
+	now time.Time,
+) (cleanupSelection, error) {
+	groupAssets, err := view.RetentionGroupAssets(ctx, group)
+	if err != nil || len(groupAssets) == 0 {
+		return cleanupSelection{}, err
+	}
+	directories := make(map[string]struct{})
+	unitPaths := retentionUnitPaths(repository.Format)
+	for _, asset := range groupAssets {
+		directories[path.Dir(asset.Path)] = struct{}{}
+		if unitPaths == nil {
+			continue
+		}
+		for _, memberPath := range unitPaths.RetentionUnitPaths(repository.FormatView(), asset.Path) {
+			directories[path.Dir(memberPath)] = struct{}{}
+		}
+	}
+	universe := make([]domain.Asset, 0, len(groupAssets))
+	for directory := range directories {
+		if directory == "." {
+			directory = ""
+		}
+		children, err := view.DirectoryAssets(ctx, directory)
+		if err != nil {
+			return cleanupSelection{}, err
+		}
+		universe = append(universe, children...)
+	}
+	selection, err := selectRepositoryCleanup(policy, repository, universe, now)
+	if err != nil {
+		return selection, err
+	}
+	grouping := repositoryRetentionGrouping(repository)
+	inGroup := func(asset domain.Asset) bool {
+		return retention.StoredKey(cleanupComponent(repository, grouping, asset)) == group
+	}
+	directoryUnits := selection.directoryUnits[:0]
+	for _, unit := range selection.directoryUnits {
+		if retention.StoredKey(unit.group) == group {
+			directoryUnits = append(directoryUnits, unit)
+		}
+	}
+	units := selection.units[:0]
+	for _, unit := range selection.units {
+		if inGroup(unit[0]) {
+			units = append(units, unit)
+		}
+	}
+	candidates := selection.candidates[:0]
+	for _, candidate := range selection.candidates {
+		if inGroup(candidate) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	selection.directoryUnits, selection.units, selection.candidates = directoryUnits, units, candidates
+	return selection, nil
+}
+
 func (s *Server) cleanupRepository(
 	ctx context.Context,
 	policy domain.CleanupPolicy,
@@ -581,20 +692,8 @@ func (s *Server) cleanupRepository(
 	if err != nil {
 		return cleanupResult{}, err
 	}
-	assets, err := s.metadata.ForRepository(repository).Assets(ctx, "")
-	if err != nil {
-		return cleanupResult{}, err
-	}
-	grouping := repositoryRetentionGrouping(repository)
-	unitPaths := retentionUnitPaths(repository.Format)
-	raw, rawComponents := rawRetention(repository)
-	if rawComponents {
-		raw = raw.withFileUnits(assets)
-		unitPaths = raw
-	}
-	directoryUnits, remainingAssets := selectRetentionDirectoryUnits(policy, repository, grouping, repositoryRetentionUnitDirectory(repository), assets, now)
-	units, ordinaryAssets := selectRetentionUnits(policy, repository, grouping, unitPaths, remainingAssets, now)
-	candidates, err := selectCleanupCandidates(policy, repository, grouping, ordinaryAssets, now)
+	view := s.metadata.ForRepository(repository)
+	scanned, err := view.AssetCount(ctx)
 	if err != nil {
 		return cleanupResult{}, err
 	}
@@ -602,10 +701,42 @@ func (s *Server) cleanupRepository(
 		Policy:     policy.Name,
 		Repository: repositoryName,
 		DryRun:     dryRun,
-		Scanned:    len(assets),
-		Matched:    len(candidates),
+		Scanned:    scanned,
 	}
-	for _, unit := range directoryUnits {
+	after := ""
+	for {
+		groups, more, err := view.RetentionGroupPage(ctx, after, cleanupGroupPageSize)
+		if err != nil {
+			return result, err
+		}
+		for _, group := range groups {
+			selection, err := s.selectGroupCleanup(ctx, view, policy, repository, group, now)
+			if err != nil {
+				return result, err
+			}
+			if err := s.applyCleanupSelection(ctx, &result, view, repository, selection, dryRun); err != nil {
+				return result, err
+			}
+		}
+		if !more || len(groups) == 0 {
+			return result, nil
+		}
+		after = groups[len(groups)-1]
+	}
+}
+
+// applyCleanupSelection previews or deletes one selection and accumulates its
+// counts into result.
+func (s *Server) applyCleanupSelection(
+	ctx context.Context,
+	result *cleanupResult,
+	view store.RepositoryView,
+	repository domain.Repository,
+	selection cleanupSelection,
+	dryRun bool,
+) error {
+	result.Matched += len(selection.candidates)
+	for _, unit := range selection.directoryUnits {
 		result.Matched += len(unit.assets)
 		if dryRun {
 			for _, asset := range unit.assets {
@@ -615,7 +746,7 @@ func (s *Server) cleanupRepository(
 		}
 		deleted, err := s.metadata.DeleteAssetsInDirectoryIfUnchanged(ctx, unit.key, unit.assets)
 		if err != nil {
-			return result, err
+			return err
 		}
 		if !deleted {
 			result.SkippedChanged += len(unit.assets)
@@ -626,7 +757,7 @@ func (s *Server) cleanupRepository(
 			s.content.EnqueueAssetEvent(ctx, domain.WebhookAssetDeleted, asset)
 		}
 	}
-	for _, unit := range units {
+	for _, unit := range selection.units {
 		result.Matched += len(unit)
 		if dryRun {
 			for _, asset := range unit {
@@ -635,10 +766,11 @@ func (s *Server) cleanupRepository(
 			continue
 		}
 		var deleted bool
-		if rawComponents {
+		var err error
+		if selection.rawComponents {
 			// A sibling published after selection joins the version, so the
 			// whole stored set must still equal the snapshot.
-			prefix, member, ok := raw.unitMember(unit[0].Path)
+			prefix, member, ok := selection.raw.UnitMember(unit[0].Path)
 			if ok {
 				deleted, err = s.metadata.DeleteAssetSetIfUnchanged(ctx, prefix, member, unit)
 			}
@@ -646,7 +778,7 @@ func (s *Server) cleanupRepository(
 			deleted, err = s.metadata.DeleteAssetsIfUnchanged(ctx, unit)
 		}
 		if err != nil {
-			return result, err
+			return err
 		}
 		if !deleted {
 			result.SkippedChanged += len(unit)
@@ -657,23 +789,27 @@ func (s *Server) cleanupRepository(
 			s.content.EnqueueAssetEvent(ctx, domain.WebhookAssetDeleted, asset)
 		}
 	}
-	byPath := make(map[string]domain.Asset, len(assets))
-	for _, asset := range assets {
-		byPath[asset.Path] = asset
-	}
-	for _, candidate := range candidates {
+	grouping := repositoryRetentionGrouping(repository)
+	for _, candidate := range selection.candidates {
 		companionPaths, ok := s.declaredCompanionPaths(repository, grouping, candidate.Path)
 		if !ok {
 			// Fail closed: a format that declared an invalid companion path
 			// keeps its artifact rather than risk an orphaned or wrong deletion.
 			s.log.Warn("skip cleanup candidate with invalid companion paths",
-				"repository", repositoryName, "path", candidate.Path)
+				"repository", repository.Name, "path", candidate.Path)
 			continue
 		}
 		if dryRun {
 			result.WouldDelete = append(result.WouldDelete, candidate.Path)
 			for _, companionPath := range companionPaths {
-				if metadata, found := byPath[companionPath]; found && metadata.Kind == "metadata" {
+				metadata, err := view.Asset(ctx, companionPath)
+				if errors.Is(err, domain.ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if metadata.Kind == "metadata" {
 					result.WouldDelete = append(result.WouldDelete, companionPath)
 				}
 			}
@@ -681,7 +817,7 @@ func (s *Server) cleanupRepository(
 		}
 		deleted, err := s.companionAssetDeleter().DeleteAssetWithCompanions(ctx, candidate, companionPaths)
 		if err != nil {
-			return result, err
+			return err
 		}
 		if deleted {
 			result.Deleted++
@@ -690,17 +826,14 @@ func (s *Server) cleanupRepository(
 			result.SkippedChanged++
 		}
 	}
-	if !dryRun {
-		result.Cascaded, err = s.manifestAliasCleanup().DeleteDanglingManifestAliases(
-			ctx,
-			repositoryName,
-			candidates,
-		)
+	if !dryRun && len(selection.candidates) > 0 {
+		cascaded, err := s.manifestAliasCleanup().DeleteDanglingManifestAliases(ctx, repository.Name, selection.candidates)
 		if err != nil {
-			return result, err
+			return err
 		}
+		result.Cascaded += cascaded
 	}
-	return result, nil
+	return nil
 }
 
 func selectCleanupCandidates(
@@ -783,52 +916,22 @@ func assetRank(repository domain.Repository, asset domain.Asset) retentionRank {
 }
 
 func cleanupSupportsAsset(asset domain.Asset) bool {
-	if asset.Kind == "raw" {
-		return true
-	}
-	return asset.Kind == "oci-manifest" &&
-		asset.Reference != "" &&
-		!strings.HasPrefix(asset.Reference, "sha256:")
+	return retention.Supports(asset)
 }
 
 // retentionGrouping returns the registered format's optional retention-grouping
 // capability, or nil when the format does not own its grouping.
 func retentionGrouping(formatName string) spiformat.RetentionGrouping {
-	registered, found := spiformat.Lookup(formatName)
-	if !found {
-		return nil
-	}
-	grouping, ok := registered.(spiformat.RetentionGrouping)
-	if !ok {
-		return nil
-	}
-	return grouping
+	return retention.FormatGrouping(formatName)
 }
 
-// cleanupComponent is the keepLast grouping key: the identity whose versions
-// compete for retention. A format that owns its grouping decides the key;
-// otherwise the host groups OCI manifests by their image name and everything
-// else by parent directory.
+// cleanupComponent is the keepLast grouping key; see retention.GroupKey.
 func cleanupComponent(
 	repository domain.Repository,
 	grouping spiformat.RetentionGrouping,
 	asset domain.Asset,
 ) string {
-	if grouping != nil {
-		if key, ok := grouping.RetentionGroupKey(repository.FormatView(), asset.FormatView()); ok {
-			return key
-		}
-	}
-	if asset.Kind == "oci-manifest" {
-		if route, ok := ocimodel.ParseAssetPath(asset.Path); ok && route.Kind == ocimodel.ManifestRoute {
-			return route.ImageName
-		}
-	}
-	directory := path.Dir(asset.Path)
-	if directory == "." {
-		return ""
-	}
-	return directory
+	return retention.GroupKey(repository, grouping, asset)
 }
 
 // maxCompanionPaths bounds the companion records one artifact may declare.

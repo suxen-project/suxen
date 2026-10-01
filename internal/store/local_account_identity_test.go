@@ -78,15 +78,7 @@ func TestAccountIdentityMigrationBackfillsDistinctStableValues(t *testing.T) {
 		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE cleanup_policies DROP COLUMN retention_order`); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := metadata.db.ExecContext(ctx, `DROP INDEX idx_assets_component`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE assets DROP COLUMN component`); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE assets DROP COLUMN component_version`); err != nil {
-			t.Fatal(err)
-		}
+		dropAssetComponentSchema(t, metadata)
 		if _, err := metadata.db.ExecContext(ctx,
 			`INSERT INTO users (username, password_hash, admin, created_at) VALUES (?, ?, ?, ?)`,
 			"migration-account-two", "legacy-hash", false, "2026-09-28T00:00:00.000000000Z"); err != nil {

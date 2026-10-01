@@ -135,6 +135,12 @@ optional hooks:
   A format must not declare shared indexes as companions. The host accepts at
   most 16 declared paths, each at most 512 bytes with no absolute prefix, empty
   segments, or dot segments; invalid declarations preserve the artifact.
+  The host stores each asset's group key when the asset is written and
+  recomputes it when the repository configuration changes; cleanup then reads
+  one group at a time, so the key must depend only on the repository
+  configuration and the asset's stored fields. Unit declarations must stay
+  reciprocal, because cleanup evaluates a group with the directories of its
+  assets and of their declared unit paths, not the whole repository.
   By default, `keepLast` counts matching asset rows by update time within each
   group. An empty companion list declares no companions; returning `ok=false`
   for a group key uses the host fallback.

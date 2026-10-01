@@ -162,3 +162,81 @@ func (s *SQLStore) ComponentPageByRepositoryID(ctx context.Context, repositoryID
 	}
 	return page, assetRows.Err()
 }
+
+// AssetCountByRepositoryID counts a repository's asset rows.
+func (s *SQLStore) AssetCountByRepositoryID(ctx context.Context, repositoryID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM assets WHERE repository_id = ?`, repositoryID).Scan(&count)
+	return count, err
+}
+
+// RetentionGroupPageByRepositoryID pages the distinct stored retention groups
+// after the given one through the retention-group index.
+func (s *SQLStore) RetentionGroupPageByRepositoryID(ctx context.Context, repositoryID string, after string, limit int) ([]string, bool, error) {
+	if limit < 1 {
+		return nil, false, errors.New("invalid retention group page request")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT retention_group FROM assets WHERE repository_id = ? AND retention_group > ?
+		 ORDER BY retention_group LIMIT ?`,
+		repositoryID, after, limit+1,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	groups := make([]string, 0, limit)
+	more := false
+	for rows.Next() {
+		var group string
+		if err := rows.Scan(&group); err != nil {
+			return nil, false, err
+		}
+		if len(groups) == limit {
+			more = true
+			break
+		}
+		groups = append(groups, group)
+	}
+	return groups, more, rows.Err()
+}
+
+// RetentionGroupAssetsByRepositoryID reads every asset of one stored group.
+func (s *SQLStore) RetentionGroupAssetsByRepositoryID(ctx context.Context, repositoryID string, group string) ([]domain.Asset, error) {
+	return s.scanAssetRows(ctx, repositoryID,
+		`SELECT `+assetColumns+` FROM assets WHERE repository_id = ? AND retention_group = ? ORDER BY id`,
+		repositoryID, group)
+}
+
+// DirectoryAssetsByRepositoryID reads the direct children of a directory; an
+// empty directory addresses the repository root.
+func (s *SQLStore) DirectoryAssetsByRepositoryID(ctx context.Context, repositoryID string, directory string) ([]domain.Asset, error) {
+	if directory == "" {
+		return s.scanAssetRows(ctx, repositoryID,
+			`SELECT `+assetColumns+` FROM assets WHERE repository_id = ? AND path NOT LIKE '%/%' ORDER BY id`,
+			repositoryID)
+	}
+	prefix := directory + "/"
+	return s.scanAssetRows(ctx, repositoryID,
+		`SELECT `+assetColumns+` FROM assets WHERE repository_id = ? AND path LIKE ? ESCAPE '!'
+		 AND substr(path, 1, length(?)) = ? AND substr(path, length(?) + 1) NOT LIKE '%/%' ORDER BY id`,
+		repositoryID, escapeLikePrefix(prefix)+"%", prefix, prefix, prefix)
+}
+
+func (s *SQLStore) scanAssetRows(ctx context.Context, repositoryID string, query string, arguments ...any) ([]domain.Asset, error) {
+	rows, err := s.db.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	assets := make([]domain.Asset, 0)
+	for rows.Next() {
+		asset, err := scanAsset(rows)
+		if err != nil {
+			return nil, err
+		}
+		asset.RepositoryID = repositoryID
+		assets = append(assets, asset)
+	}
+	return assets, rows.Err()
+}

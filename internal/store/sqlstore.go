@@ -18,6 +18,7 @@ import (
 	"github.com/suxen-project/suxen/internal/assetattrs"
 	"github.com/suxen-project/suxen/internal/domain"
 	"github.com/suxen-project/suxen/internal/ocimodel"
+	"github.com/suxen-project/suxen/internal/retention"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 	"golang.org/x/crypto/argon2"
 	_ "modernc.org/sqlite"
@@ -395,13 +396,12 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	if err := s.validateRepositoryMembers(ctx, transaction, repository); err != nil {
 		return err
 	}
-	// Raw component rules feed classification, so a change relabels assets.
-	// Take the relabel lock before any row lock: publications hold it shared
-	// while their asset inserts key-share lock this repository row.
-	if repository.Format == "raw" {
-		if err := lockClassificationRelabel(ctx, transaction); err != nil {
-			return err
-		}
+	// Format config feeds the derived asset columns (and, for Raw, the
+	// classification input), so a change rewrites asset rows. Take the relabel
+	// lock before any row lock: publications hold it shared while their asset
+	// inserts key-share lock this repository row.
+	if err := lockClassificationRelabel(ctx, transaction); err != nil {
+		return err
 	}
 
 	var targetBlobStore string
@@ -533,7 +533,7 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	if err := replaceRepositoryMembersTx(ctx, transaction, repository); err != nil {
 		return err
 	}
-	if repository.Format == "raw" && formatConfig != currentFormatConfig {
+	if formatConfig != currentFormatConfig {
 		if err := relabelRepositoryTx(ctx, transaction, repository.Name); err != nil {
 			return err
 		}
@@ -1028,16 +1028,20 @@ func (s *SQLStore) putAssetTx(
 	}
 	// The component columns derive from the format config read under this
 	// publication's lock, so a concurrent pattern change relabels after it.
-	component, componentVersion := storedComponent(asset, repositoryFormat, formatConfig)
+	derived := derivedAssetColumns(asset, domain.Repository{
+		Name: repositoryName, Format: repositoryFormat, Type: repositoryType, Upstream: repositoryUpstream,
+		AllowOverwrite: &allowOverwrite, FormatConfig: formatConfig,
+	})
 	const query = `
 		INSERT INTO assets (
 			repository_id, path, format_path, digest, size, blob_store, content_type, kind, reference,
 			subject_digest, attributes, created_at, updated_at, validated_at, last_accessed,
-			component, component_version
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			component, component_version, retention_group
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(repository_id, path) DO UPDATE SET
 			component = excluded.component,
 			component_version = excluded.component_version,
+			retention_group = excluded.retention_group,
 			format_path = excluded.format_path,
 			digest = excluded.digest,
 			size = excluded.size,
@@ -1127,8 +1131,9 @@ func (s *SQLStore) putAssetTx(
 		formatTime(now),
 		formatTime(now),
 		formatTime(lastAccessed),
-		component,
-		componentVersion,
+		derived.component,
+		derived.version,
+		derived.group,
 	)
 	if err != nil {
 		// A pinned identity that no longer exists (deleted mid-operation) fails
@@ -2920,10 +2925,19 @@ func isRepositoryBlobStoreInUseError(err error) bool {
 	)
 }
 
-// storedComponent computes an asset's component columns from its format path.
-func storedComponent(asset domain.Asset, format string, formatConfig map[string]any) (string, string) {
-	if asset.FormatPath != "" {
-		asset.Path = asset.FormatPath
+// derivedColumns are the asset columns computed from the asset and its
+// repository's configuration rather than supplied by the writer.
+type derivedColumns struct {
+	component, version, group string
+}
+
+// derivedAssetColumns computes the component columns from the format path and
+// the retention group exactly as cleanup groups the asset.
+func derivedAssetColumns(asset domain.Asset, repository domain.Repository) derivedColumns {
+	formatAsset := asset
+	if formatAsset.FormatPath != "" {
+		formatAsset.Path = formatAsset.FormatPath
 	}
-	return assetattrs.Component(asset, domain.Repository{Format: format, FormatConfig: formatConfig})
+	component, version := assetattrs.Component(formatAsset, repository)
+	return derivedColumns{component: component, version: version, group: retention.StoredGroup(repository, asset)}
 }

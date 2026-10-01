@@ -7,6 +7,7 @@ import (
 
 	"github.com/suxen-project/suxen/internal/assetattrs"
 	"github.com/suxen-project/suxen/internal/domain"
+	"github.com/suxen-project/suxen/internal/retention"
 )
 
 func componentTestConfig() map[string]any {
@@ -57,16 +58,10 @@ func TestAssetComponentMigrationBackfillsRawAndOCIRows(t *testing.T) {
 		putComponentTestAsset(t, metadata, "images", "v2/team/app/manifests/sha256:"+strings.Repeat("d", 64), "oci-manifest", "sha256:"+strings.Repeat("d", 64))
 
 		// Recreate the pre-16 shape with the rows above, then migrate forward.
-		for _, statement := range []string{
-			`DELETE FROM schema_migrations WHERE version >= 16`,
-			`DROP INDEX idx_assets_component`,
-			`ALTER TABLE assets DROP COLUMN component`,
-			`ALTER TABLE assets DROP COLUMN component_version`,
-		} {
-			if _, err := metadata.db.ExecContext(ctx, statement); err != nil {
-				t.Fatal(err)
-			}
+		if _, err := metadata.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 16`); err != nil {
+			t.Fatal(err)
 		}
+		dropAssetComponentSchema(t, metadata)
 		if err := metadata.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -83,6 +78,26 @@ func TestAssetComponentMigrationBackfillsRawAndOCIRows(t *testing.T) {
 			component, version := assetComponent(t, metadata, tc.repository, tc.path)
 			if component != tc.component || version != tc.version {
 				t.Errorf("%s/%s component = %q@%q, want %q@%q", tc.repository, tc.path, component, version, tc.component, tc.version)
+			}
+		}
+		for _, tc := range []struct {
+			repository, path, group string
+		}{
+			{"models", "models/core/0.2.0/core.glb", retention.StoredKey("\x01raw-component\x01models/core")},
+			{"models", "docs/readme.txt", "gdocs"},
+			{"plain", "models/core/0.2.0/core.glb", "gmodels/core/0.2.0"},
+			{"images", "v2/team/app/manifests/1.2.3", "gteam/app"},
+			{"images", "v2/team/app/manifests/sha256:" + strings.Repeat("d", 64), ""},
+		} {
+			var group string
+			if err := metadata.db.QueryRowContext(ctx,
+				`SELECT retention_group FROM assets WHERE repository_id = (SELECT id FROM repositories WHERE name = ?) AND path = ?`,
+				tc.repository, tc.path,
+			).Scan(&group); err != nil {
+				t.Fatal(err)
+			}
+			if group != tc.group {
+				t.Errorf("%s/%s retention group = %q, want %q", tc.repository, tc.path, group, tc.group)
 			}
 		}
 	})
@@ -206,4 +221,21 @@ func mapsEqual(left, right any) bool {
 		}
 	}
 	return true
+}
+
+// dropAssetComponentSchema undoes migration 16's schema so a test can rerun
+// it against rows written by the current code.
+func dropAssetComponentSchema(t *testing.T, metadata *SQLStore) {
+	t.Helper()
+	for _, statement := range []string{
+		`DROP INDEX idx_assets_component`,
+		`DROP INDEX idx_assets_retention_group`,
+		`ALTER TABLE assets DROP COLUMN component`,
+		`ALTER TABLE assets DROP COLUMN component_version`,
+		`ALTER TABLE assets DROP COLUMN retention_group`,
+	} {
+		if _, err := metadata.db.ExecContext(context.Background(), statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
