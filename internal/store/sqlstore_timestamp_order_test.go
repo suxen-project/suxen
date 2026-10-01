@@ -214,6 +214,17 @@ func TestTimestampMigrationPreservesValuesAndPredicatesOnBothDialects(t *testing
 				t.Fatal(err)
 			}
 		}
+		// Asset writes above use the current columns; drop them only now so
+		// migration 16 runs against its pre-migration shape.
+		if _, err := store.db.ExecContext(ctx, `DROP INDEX idx_assets_component`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `ALTER TABLE assets DROP COLUMN component`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `ALTER TABLE assets DROP COLUMN component_version`); err != nil {
+			t.Fatal(err)
+		}
 		if err := store.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}

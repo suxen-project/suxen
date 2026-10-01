@@ -612,6 +612,12 @@ type Asset struct {
 	ValidatedAt   time.Time      `json:"validatedAt"`
 	LastAccessed  *time.Time     `json:"lastAccessed,omitempty"`
 	Dependencies  []string       `json:"-"`
+	// Component and ComponentVersion are the stored component identity: a Raw
+	// component pattern match or an OCI image and tag. ComponentStored marks a
+	// row read from the store, whose columns are then authoritative.
+	Component        string `json:"-"`
+	ComponentVersion string `json:"-"`
+	ComponentStored  bool   `json:"-"`
 	// Immutable is a caller publication precondition for proxy cache paths and
 	// distinguishes per-version metadata from mutable hosted indexes. Hosted
 	// artifact replacement follows the repository policy. Never persisted.

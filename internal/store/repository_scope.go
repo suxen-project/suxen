@@ -19,6 +19,10 @@ type RepositoryView interface {
 	Assets(context.Context, string) ([]domain.Asset, error)
 	AssetPaths(context.Context, string, string, int) ([]string, error)
 	AssetPage(context.Context, AssetPageRequest) (AssetPage, error)
+	// ComponentPage pages distinct stored component names after the
+	// component of the given asset ID (0 starts at the beginning) and returns
+	// every asset of the components on the page.
+	ComponentPage(context.Context, int64, int) (ComponentPage, error)
 	DeleteAsset(context.Context, string) (domain.Asset, error)
 	DeleteAssetWithCompanions(context.Context, string, []string) (domain.Asset, error)
 	DeleteAssetByIDWithCompanions(context.Context, int64, []string) (domain.Asset, error)
@@ -46,6 +50,7 @@ type repositoryBackend interface {
 	AssetsByRepositoryID(context.Context, string, string) ([]domain.Asset, error)
 	AssetPathsByRepositoryID(context.Context, string, string, string, int) ([]string, error)
 	AssetPageByRepositoryID(context.Context, string, AssetPageRequest) (AssetPage, error)
+	ComponentPageByRepositoryID(context.Context, string, int64, int) (ComponentPage, error)
 	DeleteAssetByRepositoryID(context.Context, string, string, string) (domain.Asset, error)
 	DeleteAssetWithCompanionsByRepositoryID(context.Context, string, string, string, []string) (domain.Asset, error)
 	DeleteAssetByIDWithCompanionsByRepositoryID(context.Context, string, string, int64, []string) (domain.Asset, error)
@@ -111,6 +116,10 @@ func (scope repositoryScope) AssetPaths(ctx context.Context, prefix, after strin
 
 func (scope repositoryScope) AssetPage(ctx context.Context, request AssetPageRequest) (AssetPage, error) {
 	return scope.metadata.AssetPageByRepositoryID(ctx, scope.repository.ID, request)
+}
+
+func (scope repositoryScope) ComponentPage(ctx context.Context, after int64, limit int) (ComponentPage, error) {
+	return scope.metadata.ComponentPageByRepositoryID(ctx, scope.repository.ID, after, limit)
 }
 
 func (scope repositoryScope) DeleteAsset(ctx context.Context, path string) (domain.Asset, error) {

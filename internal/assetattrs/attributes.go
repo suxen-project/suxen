@@ -275,11 +275,35 @@ var formatProjectors = map[string]func(domain.Asset, domain.Repository) map[stri
 // alike.
 func rawAttributes(asset domain.Asset, repository domain.Repository) map[string]any {
 	attributes := map[string]any{"path": asset.Path}
-	if match, ok := rawcomponent.ForConfig(repository.FormatConfig).Match(asset.Path); ok {
-		attributes["component"] = match.Name
-		attributes["version"] = match.Version
+	component, version := asset.Component, asset.ComponentVersion
+	if !asset.ComponentStored {
+		component, version = Component(asset, repository)
+	}
+	if component != "" {
+		attributes["component"] = component
+		attributes["version"] = version
 	}
 	return attributes
+}
+
+// Component derives the identity stored in an asset's component columns: the
+// first matching Raw component pattern, or an OCI tagged manifest's image and
+// tag. Other assets have none. asset.Path must be the format path.
+func Component(asset domain.Asset, repository domain.Repository) (component, version string) {
+	switch repository.Format {
+	case "raw":
+		if match, ok := rawcomponent.ForConfig(repository.FormatConfig).Match(asset.Path); ok {
+			return match.Name, match.Version
+		}
+	case "oci":
+		if asset.Kind != "oci-manifest" || asset.Reference == "" || isDigestReference(asset.Reference) {
+			return "", ""
+		}
+		if image, found := ociImage(asset.Path); found {
+			return image, asset.Reference
+		}
+	}
+	return "", ""
 }
 
 func systemAttributes(asset domain.Asset, repository domain.Repository) map[string]any {

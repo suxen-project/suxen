@@ -766,7 +766,7 @@
         "operationId": "browseRepositoryComponents",
         "x-suxen-required-privilege": "repository:{name}:read",
         "summary": "Browse bounded component-version rows from a repository",
-        "description": "A hosted or proxy Raw repository with formatConfig components returns one row per component version with its member assets, ordered by component and then highest version first; paths matching no component pattern and versions without an anchor file are omitted. Other repositories return one row per asset ordered by asset path.",
+        "description": "A hosted or proxy Raw repository with formatConfig components returns one row per component version with its member assets, ordered by component and then highest version first; limit counts components, and each page carries every version of its components; paths matching no component pattern and versions without an anchor file are omitted. Other repositories return one row per asset ordered by asset path.",
         "tags": ["Discovery"],
         "parameters": [
           {"$ref": "#/components/parameters/Limit"},

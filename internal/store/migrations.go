@@ -43,6 +43,7 @@ var schemaMigrations = []schemaMigration{
 	{version: 13, name: "fixed_width_timestamps"},
 	{version: 14, name: "local_account_identity"},
 	{version: 15, name: "cleanup_policy_order"},
+	{version: 16, name: "asset_components"},
 }
 
 const createSchemaMigrationsTable = `
@@ -208,6 +209,12 @@ func (s *SQLStore) applyMigration(
 			migration.name,
 			err,
 		)
+	}
+
+	if migration.version == 16 {
+		if err := backfillAssetComponents(ctx, transaction); err != nil {
+			return fmt.Errorf("backfill asset components: %w", err)
+		}
 	}
 
 	if _, err := transaction.ExecContext(

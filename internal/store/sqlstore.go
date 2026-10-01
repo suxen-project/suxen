@@ -66,7 +66,9 @@ const assetColumns = `
     created_at,
     updated_at,
     validated_at,
-    last_accessed`
+    last_accessed,
+    component,
+    component_version`
 
 // assetColumnsForReturning lists the raw asset columns for a DELETE ... RETURNING,
 // where SQLite forbids the correlated subquery above. The repository name is set
@@ -87,7 +89,9 @@ const assetColumnsForReturning = `
     created_at,
     updated_at,
     validated_at,
-    last_accessed`
+    last_accessed,
+    component,
+    component_version`
 
 // SQLStore implements Store for SQLite files and, via embedding, PostgreSQL.
 type SQLStore struct {
@@ -898,20 +902,6 @@ func (s *SQLStore) PutAssets(
 				return nil, err
 			}
 			classifications[asset.Repository] = config
-			if repository := repositories[asset.Repository]; repository.Format == "raw" {
-				// Raw component rules are classification inputs; read them under
-				// the relabel lock so a concurrent rule change cannot be missed.
-				var encoded string
-				if err := transaction.QueryRowContext(ctx,
-					`SELECT format_config FROM repositories WHERE id = ?`, repository.ID,
-				).Scan(&encoded); err != nil {
-					return nil, err
-				}
-				if repository.FormatConfig, err = decodeFormatConfig(encoded); err != nil {
-					return nil, err
-				}
-				repositories[asset.Repository] = repository
-			}
 		}
 		if err := s.putAssetTx(ctx, transaction, asset, now); err != nil {
 			return nil, err
@@ -1036,12 +1026,18 @@ func (s *SQLStore) putAssetTx(
 	if err != nil {
 		return err
 	}
+	// The component columns derive from the format config read under this
+	// publication's lock, so a concurrent pattern change relabels after it.
+	component, componentVersion := storedComponent(asset, repositoryFormat, formatConfig)
 	const query = `
 		INSERT INTO assets (
 			repository_id, path, format_path, digest, size, blob_store, content_type, kind, reference,
-			subject_digest, attributes, created_at, updated_at, validated_at, last_accessed
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			subject_digest, attributes, created_at, updated_at, validated_at, last_accessed,
+			component, component_version
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(repository_id, path) DO UPDATE SET
+			component = excluded.component,
+			component_version = excluded.component_version,
 			format_path = excluded.format_path,
 			digest = excluded.digest,
 			size = excluded.size,
@@ -1131,6 +1127,8 @@ func (s *SQLStore) putAssetTx(
 		formatTime(now),
 		formatTime(now),
 		formatTime(lastAccessed),
+		component,
+		componentVersion,
 	)
 	if err != nil {
 		// A pinned identity that no longer exists (deleted mid-operation) fails
@@ -2675,6 +2673,8 @@ func scanAsset(source scanner) (domain.Asset, error) {
 		&updatedAt,
 		&validatedAt,
 		&lastAccessed,
+		&asset.Component,
+		&asset.ComponentVersion,
 	)
 	return finishAsset(asset, err, attributes, createdAt, updatedAt, validatedAt, lastAccessed)
 }
@@ -2708,6 +2708,8 @@ func scanAssetReturning(source scanner, repositoryName string) (domain.Asset, er
 		&updatedAt,
 		&validatedAt,
 		&lastAccessed,
+		&asset.Component,
+		&asset.ComponentVersion,
 	)
 	asset.Repository = repositoryName
 	return finishAsset(asset, err, attributes, createdAt, updatedAt, validatedAt, lastAccessed)
@@ -2728,6 +2730,7 @@ func finishAsset(
 	if err != nil {
 		return asset, err
 	}
+	asset.ComponentStored = true
 	if err := decodeJSONNumbers(attributes, &asset.Attributes); err != nil {
 		return asset, fmt.Errorf("decode asset attributes: %w", err)
 	}
@@ -2915,4 +2918,12 @@ func isRepositoryBlobStoreInUseError(err error) bool {
 		strings.ToLower(err.Error()),
 		"repository blob store in use",
 	)
+}
+
+// storedComponent computes an asset's component columns from its format path.
+func storedComponent(asset domain.Asset, format string, formatConfig map[string]any) (string, string) {
+	if asset.FormatPath != "" {
+		asset.Path = asset.FormatPath
+	}
+	return assetattrs.Component(asset, domain.Repository{Format: format, FormatConfig: formatConfig})
 }

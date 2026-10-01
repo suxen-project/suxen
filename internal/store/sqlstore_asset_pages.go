@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"github.com/suxen-project/suxen/internal/domain"
 )
@@ -73,4 +74,91 @@ func (s *SQLStore) MaxAssetID(ctx context.Context) (int64, error) {
 	var maximum int64
 	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(id), 0) FROM assets`).Scan(&maximum)
 	return maximum, err
+}
+
+// ComponentPage is one keyset page of distinct component names with every
+// asset row of those components.
+type ComponentPage struct {
+	Components []string
+	Assets     []domain.Asset
+	HasMore    bool
+}
+
+// componentAfterAsset resolves a keyset cursor: the component of the asset a
+// previous page ended on. A removed asset reports domain.ErrNotFound.
+func (s *SQLStore) componentAfterAsset(ctx context.Context, repositoryID string, afterID int64) (string, error) {
+	if afterID == 0 {
+		return "", nil
+	}
+	var component string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT component FROM assets WHERE repository_id = ? AND id = ? AND component <> ''`,
+		repositoryID, afterID,
+	).Scan(&component)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", domain.ErrNotFound
+	}
+	return component, err
+}
+
+// ComponentPageByRepositoryID pages distinct non-empty component names after
+// the component of asset afterID through the component index, then reads only
+// those components' rows, so a page never scans unrelated assets.
+func (s *SQLStore) ComponentPageByRepositoryID(ctx context.Context, repositoryID string, afterID int64, limit int) (ComponentPage, error) {
+	page := ComponentPage{Components: make([]string, 0), Assets: make([]domain.Asset, 0)}
+	if limit < 1 || limit > 200 || afterID < 0 {
+		return page, errors.New("invalid component page request")
+	}
+	after, err := s.componentAfterAsset(ctx, repositoryID, afterID)
+	if err != nil {
+		return page, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT component FROM assets WHERE repository_id = ? AND component > ?
+		 ORDER BY component LIMIT ?`,
+		repositoryID, after, limit+1,
+	)
+	if err != nil {
+		return page, err
+	}
+	for rows.Next() {
+		var component string
+		if err := rows.Scan(&component); err != nil {
+			rows.Close()
+			return page, err
+		}
+		if len(page.Components) == limit {
+			page.HasMore = true
+			break
+		}
+		page.Components = append(page.Components, component)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(page.Components) == 0 {
+		return page, err
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?, ", len(page.Components)), ", ")
+	arguments := []any{repositoryID}
+	for _, component := range page.Components {
+		arguments = append(arguments, component)
+	}
+	assetRows, err := s.db.QueryContext(ctx,
+		`SELECT `+assetColumns+` FROM assets WHERE repository_id = ? AND component IN (`+placeholders+`)
+		 ORDER BY component, component_version, id`,
+		arguments...,
+	)
+	if err != nil {
+		return page, err
+	}
+	defer assetRows.Close()
+	for assetRows.Next() {
+		asset, err := scanAsset(assetRows)
+		if err != nil {
+			return page, err
+		}
+		asset.RepositoryID = repositoryID
+		page.Assets = append(page.Assets, asset)
+	}
+	return page, assetRows.Err()
 }

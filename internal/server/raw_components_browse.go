@@ -1,6 +1,10 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"sort"
 
@@ -9,30 +13,89 @@ import (
 	"github.com/suxen-project/suxen/internal/rawcomponent"
 )
 
+// rawComponentCursor resumes after the component of asset AfterID. Resource
+// binds it to the repository and its patterns, so a pattern change makes
+// outstanding cursors stale.
+type rawComponentCursor struct {
+	Version  int    `json:"v"`
+	Resource string `json:"r"`
+	AfterID  int64  `json:"a"`
+}
+
 // writeRawComponents lists a Raw repository's component versions, one row per
-// version with its member files. Rows are ordered by component, newest version
-// first. Unmatched paths and versions without an anchor file are omitted, as
-// they are not versions for retention either.
+// version with its member files. Pages hold limit components with all their
+// versions, ordered by component and then newest version first. Unmatched
+// paths and versions without an anchor file are omitted, as they are not
+// versions for retention either.
 func (s *Server) writeRawComponents(
 	w http.ResponseWriter,
 	r *http.Request,
 	repository domain.Repository,
 	rules rawcomponent.Rules,
 ) {
-	assets, err := s.metadata.ForRepository(repository).Assets(r.Context(), "")
+	limit, err := httpx.CollectionLimit(r)
+	if err != nil {
+		httpx.WriteProblem(w, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	resource := rawComponentResource(repository)
+	cursor := rawComponentCursor{Version: 1, Resource: resource}
+	if encoded := r.URL.Query().Get("cursor"); encoded != "" {
+		var supplied rawComponentCursor
+		if err := httpx.DecodeCursor(encoded, &supplied); err != nil || supplied.Version != 1 || supplied.AfterID < 1 {
+			httpx.WriteCursorError(w, errors.New("cursor payload is invalid"))
+			return
+		}
+		if supplied.Resource != resource {
+			httpx.WriteCursorError(w, &httpx.StaleCursorError{Reason: "cursor belongs to a different collection"})
+			return
+		}
+		cursor = supplied
+	}
+	page, err := s.metadata.ForRepository(repository).ComponentPage(r.Context(), cursor.AfterID, limit)
+	if errors.Is(err, domain.ErrNotFound) {
+		httpx.WriteCursorError(w, &httpx.StaleCursorError{Reason: "collection changed after the cursor was issued"})
+		return
+	}
 	if err != nil {
 		httpx.WriteResult(w, nil, err)
 		return
 	}
+	versions, lastID := rawComponentVersions(repository, rules, page.Assets)
+	result := httpx.CollectionPage[repositoryComponentVersion]{Items: versions}
+	if page.HasMore && lastID > 0 {
+		result.NextCursor = httpx.EncodeCursor(rawComponentCursor{Version: 1, Resource: resource, AfterID: lastID})
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+
+func rawComponentResource(repository domain.Repository) string {
+	encoded, _ := json.Marshal(repository.FormatConfig)
+	digest := sha256.Sum256(encoded)
+	return "repository-components:" + repository.ID + ":" + base64.RawURLEncoding.EncodeToString(digest[:12])
+}
+
+// rawComponentVersions groups one page of component rows into version rows and
+// returns the ID of an asset in the page's last component for the next cursor.
+func rawComponentVersions(
+	repository domain.Repository,
+	rules rawcomponent.Rules,
+	assets []domain.Asset,
+) ([]repositoryComponentVersion, int64) {
 	type versionKey struct {
 		rule                     int
 		name, version, directory string
 	}
 	rows := make(map[versionKey]*repositoryComponentVersion)
 	anchored := make(map[versionKey]bool)
+	var lastComponent string
+	var lastID int64
 	for _, asset := range assets {
-		match, ok := rules.Match(asset.Path)
-		if !ok {
+		if asset.Component >= lastComponent {
+			lastComponent, lastID = asset.Component, asset.ID
+		}
+		match, ok := rules.Match(assetPublicPath(asset))
+		if !ok || match.Name != asset.Component {
 			continue
 		}
 		key := versionKey{rule: match.Rule, name: match.Name, version: match.Version, directory: match.Directory}
@@ -70,8 +133,5 @@ func (s *Server) writeRawComponents(
 		}
 		return versions[i].Reference < versions[j].Reference
 	})
-	httpx.WriteCollection(w, r, "repository-components:"+repository.ID, versions,
-		func(row repositoryComponentVersion) string {
-			return row.Component + "\x00" + row.Version + "\x00" + row.Reference
-		})
+	return versions, lastID
 }
