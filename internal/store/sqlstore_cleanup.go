@@ -18,6 +18,7 @@ const cleanupPolicyColumns = `
 	repositories,
 	criteria,
 	keep_last,
+	retention_order,
 	action,
 	enabled,
 	created_at,
@@ -527,6 +528,26 @@ func relabelRepositoryTargets(
 	return total, nil
 }
 
+// relabelRepositoryTx reapplies a repository's effective rules after a change
+// to the repository fields that classification predicates project. The caller
+// holds the relabel lock.
+func relabelRepositoryTx(ctx context.Context, transaction *dialectTx, repositoryName string) error {
+	repository, err := repositoryFrom(ctx, transaction, repositoryName)
+	if err != nil {
+		return err
+	}
+	config, err := classificationFrom(ctx, transaction, repositoryName)
+	if err != nil {
+		return err
+	}
+	effective, err := effectiveClassificationFrom(ctx, transaction, config)
+	if err != nil || len(effective.Rules) == 0 {
+		return err
+	}
+	_, err = relabelRepositoryAssets(ctx, transaction, repository, effective.Rules, time.Now().UTC())
+	return err
+}
+
 // relabelRepositoryAssets rewrites classification.* on every asset of one
 // repository from the given effective rules, within the transaction.
 func relabelRepositoryAssets(
@@ -706,9 +727,9 @@ func insertCleanupPolicyRow(
 ) error {
 	const query = `
 		INSERT INTO cleanup_policies (
-			name, repositories, criteria, keep_last, action, enabled,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			name, repositories, criteria, keep_last, retention_order, action,
+			enabled, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := executor.ExecContext(
 		ctx,
 		query,
@@ -716,6 +737,7 @@ func insertCleanupPolicyRow(
 		repositories,
 		criteria,
 		policy.KeepLast,
+		policy.Order,
 		policy.Action,
 		policy.Enabled,
 		formatTime(policy.CreatedAt),
@@ -736,8 +758,8 @@ func updateCleanupPolicyRow(
 ) error {
 	const query = `
 		UPDATE cleanup_policies
-		SET repositories = ?, criteria = ?, keep_last = ?, action = ?,
-			enabled = ?, updated_at = ?
+		SET repositories = ?, criteria = ?, keep_last = ?, retention_order = ?,
+			action = ?, enabled = ?, updated_at = ?
 		WHERE name = ?`
 	result, err := executor.ExecContext(
 		ctx,
@@ -745,6 +767,7 @@ func updateCleanupPolicyRow(
 		repositories,
 		criteria,
 		policy.KeepLast,
+		policy.Order,
 		policy.Action,
 		policy.Enabled,
 		formatTime(time.Now().UTC()),
@@ -807,6 +830,7 @@ func scanCleanupPolicy(source scanner) (domain.CleanupPolicy, error) {
 		&repositories,
 		&criteria,
 		&policy.KeepLast,
+		&policy.Order,
 		&policy.Action,
 		&policy.Enabled,
 		&createdAt,
@@ -835,6 +859,9 @@ func scanCleanupPolicy(source scanner) (domain.CleanupPolicy, error) {
 func normalizeCleanupPolicy(policy *domain.CleanupPolicy) {
 	if policy.Action == "" {
 		policy.Action = "delete"
+	}
+	if policy.Order == "" {
+		policy.Order = domain.CleanupOrderUpdatedAt
 	}
 	now := time.Now().UTC()
 	if policy.CreatedAt.IsZero() {

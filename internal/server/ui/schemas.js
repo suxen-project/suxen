@@ -24,7 +24,7 @@ export const schemas = {
     text("upstream", "Upstream URL", {help: "Required for proxies. Leave unchanged to retain stored credentials and query parameters; enter a new URL to replace them."}),
     list("members", "Group members", {help: "Repository names, one per row."}),
     json("formatConfig", "Format configuration", {
-      help: "Format-specific settings, for example Maven {\"versionPolicy\":\"release\"}.",
+      help: "Format-specific settings, for example Maven {\"versionPolicy\":\"release\"} or Raw {\"components\":[{\"pattern\":\"^(?P<name>.+)/(?P<version>[^/]+)/[^/]+$\"}]}.",
     }),
     json("endpoints", "OCI endpoints", {
       help: "Optional hosts and extra listen ports so Docker can use this repository at a registry root. Example: {\"hosts\":[\"registry.example.com\"],\"ports\":[5000]}.",
@@ -54,6 +54,8 @@ export const schemas = {
       help: "All predicates must match. sys.blobStore can target an aggressively cleaned store.",
     },
     {name: "keepLast", label: "Keep newest matches", type: "number", min: 0},
+    {name: "order", label: "Retention order", type: "select", options: ["updatedAt", "version"],
+      help: "updatedAt keeps the most recently updated; version keeps the highest Raw component version or OCI tag."},
     {name: "action", label: "Action", type: "select", options: ["delete"]},
     {name: "enabled", label: "Enabled", type: "boolean",
       help: "Enabled policies run on the shared cleanup interval; there is no per-policy schedule."},

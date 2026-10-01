@@ -469,7 +469,7 @@ async function deleteResource(resourceName, descriptor, item) {
 
 const editableFields = {
   "blob-stores": ["name", "driver", "configurationRef", "attributes"],
-  "cleanup-policies": ["name", "repositories", "criteria", "keepLast", "action", "enabled"],
+  "cleanup-policies": ["name", "repositories", "criteria", "keepLast", "order", "action", "enabled"],
   users: ["username", "password", "admin", "roles"],
   roles: ["name", "description", "privileges"],
   "oidc-providers": ["name", "issuer", "clientId", "clientSecret", "scopes", "groupsClaim",

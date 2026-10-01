@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/suxen-project/suxen/internal/domain"
+	"github.com/suxen-project/suxen/internal/rawcomponent"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 )
 
@@ -54,7 +55,7 @@ var knownAttributePaths = []string{
 	"sys.repository", "sys.format", "sys.type", "sys.blobStore", "sys.path",
 	"sys.digest", "sys.size", "sys.contentType", "sys.kind", "sys.createdAt",
 	"sys.updatedAt", "sys.lastAccessed", "sys.validatedAt",
-	"raw.path",
+	"raw.path", "raw.component", "raw.version",
 	"oci.image", "oci.tag", "oci.digest", "oci.mediaType", "oci.artifactType",
 	"provenance.status", "provenance.format", "provenance.fingerprint",
 	"provenance.identity", "provenance.issuer", "provenance.reason",
@@ -166,7 +167,7 @@ func Project(asset domain.Asset, repository domain.Repository) map[string]any {
 	attributes["sys"] = systemAttributes(formatAsset, repository)
 
 	if projector, found := formatProjectors[repository.Format]; found {
-		attributes[repository.Format] = projector(formatAsset)
+		attributes[repository.Format] = projector(formatAsset, repository)
 	} else if projected, ok := pluginFormatAttributes(formatAsset, repository); ok {
 		attributes[repository.Format] = projected
 	}
@@ -262,11 +263,23 @@ func longestAttributePrefix(object map[string]any, segments []string) int {
 // formatProjectors is the coordinate hook for repository formats. A new format
 // adds its authoritative virtual coordinate namespace here rather than copying
 // coordinates into every stored asset.
-var formatProjectors = map[string]func(domain.Asset) map[string]any{
-	"oci": ociAttributes,
-	"raw": func(asset domain.Asset) map[string]any {
-		return map[string]any{"path": asset.Path}
+var formatProjectors = map[string]func(domain.Asset, domain.Repository) map[string]any{
+	"oci": func(asset domain.Asset, _ domain.Repository) map[string]any {
+		return ociAttributes(asset)
 	},
+	"raw": rawAttributes,
+}
+
+// rawAttributes adds the component and version of the repository's first
+// matching component rule, so rules can address a payload and its side files
+// alike.
+func rawAttributes(asset domain.Asset, repository domain.Repository) map[string]any {
+	attributes := map[string]any{"path": asset.Path}
+	if match, ok := rawcomponent.ForConfig(repository.FormatConfig).Match(asset.Path); ok {
+		attributes["component"] = match.Name
+		attributes["version"] = match.Version
+	}
+	return attributes
 }
 
 func systemAttributes(asset domain.Asset, repository domain.Repository) map[string]any {

@@ -600,7 +600,7 @@ func assertProvisioningContract(t *testing.T, document map[string]any) {
 		"role":           {"description", "privileges"},
 		"user":           {"admin", "password", "roles", "secret", "secretRef"},
 		"oidcProvider":   {"allowPasswordGrant", "clientId", "clientSecret", "defaultRoles", "groupRoles", "groupsClaim", "issuer", "scopes", "secret", "secretRef"},
-		"cleanupPolicy":  {"action", "criteria", "enabled", "keepLast", "repositories"},
+		"cleanupPolicy":  {"action", "criteria", "enabled", "keepLast", "order", "repositories"},
 		"classification": {"rules"},
 		"trustPolicy": {
 			"allowedIdentities", "certificateAuthorities", "deniedFingerprints",

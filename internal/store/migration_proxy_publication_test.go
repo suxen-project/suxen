@@ -43,6 +43,9 @@ func TestProxyPublicationMigrationPreservesPriorCacheOnBothDialects(t *testing.T
 		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE users DROP COLUMN identity`); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE cleanup_policies DROP COLUMN retention_order`); err != nil {
+			t.Fatal(err)
+		}
 		if err := metadata.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}

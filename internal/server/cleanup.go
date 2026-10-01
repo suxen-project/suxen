@@ -87,6 +87,7 @@ type cleanupPolicyRequest struct {
 	Repositories []string               `json:"repositories"`
 	Criteria     domain.CleanupCriteria `json:"criteria"`
 	KeepLast     int                    `json:"keepLast,omitempty"`
+	Order        string                 `json:"order,omitempty"`
 	Action       string                 `json:"action,omitempty"`
 	Enabled      bool                   `json:"enabled"`
 }
@@ -95,6 +96,7 @@ type cleanupPolicyUpdateRequest struct {
 	Repositories []string               `json:"repositories"`
 	Criteria     domain.CleanupCriteria `json:"criteria"`
 	KeepLast     int                    `json:"keepLast,omitempty"`
+	Order        string                 `json:"order,omitempty"`
 	Action       string                 `json:"action,omitempty"`
 	Enabled      bool                   `json:"enabled"`
 }
@@ -104,6 +106,7 @@ func (request cleanupPolicyUpdateRequest) domainPolicy(name string) domain.Clean
 		Repositories: request.Repositories,
 		Criteria:     request.Criteria,
 		KeepLast:     request.KeepLast,
+		Order:        request.Order,
 		Action:       request.Action,
 		Enabled:      request.Enabled,
 	}.domainPolicy(name)
@@ -118,6 +121,7 @@ func (request cleanupPolicyRequest) domainPolicy(name string) domain.CleanupPoli
 		Repositories: request.Repositories,
 		Criteria:     request.Criteria,
 		KeepLast:     request.KeepLast,
+		Order:        request.Order,
 		Action:       request.Action,
 		Enabled:      request.Enabled,
 	}
@@ -581,8 +585,8 @@ func (s *Server) cleanupRepository(
 	if err != nil {
 		return cleanupResult{}, err
 	}
-	grouping := retentionGrouping(repository.Format)
-	directoryUnits, remainingAssets := selectRetentionDirectoryUnits(policy, repository, grouping, retentionUnitDirectory(repository.Format), assets, now)
+	grouping := repositoryRetentionGrouping(repository)
+	directoryUnits, remainingAssets := selectRetentionDirectoryUnits(policy, repository, grouping, repositoryRetentionUnitDirectory(repository), assets, now)
 	units, ordinaryAssets := selectRetentionUnits(policy, repository, grouping, retentionUnitPaths(repository.Format), remainingAssets, now)
 	candidates, err := selectCleanupCandidates(policy, repository, grouping, ordinaryAssets, now)
 	if err != nil {
@@ -701,7 +705,7 @@ func selectCleanupCandidates(
 		matched = append(matched, asset)
 	}
 
-	retained := newestAssetIDs(matched, policy.KeepLast, repository, grouping)
+	retained := newestAssetIDs(matched, policy.KeepLast, policy.Order, repository, grouping)
 	candidates := make([]domain.Asset, 0, len(matched))
 	for _, asset := range matched {
 		if _, keep := retained[asset.ID]; !keep {
@@ -727,6 +731,7 @@ func assetMatchesCleanupCriteria(
 func newestAssetIDs(
 	assets []domain.Asset,
 	keepLast int,
+	order string,
 	repository domain.Repository,
 	grouping spiformat.RetentionGrouping,
 ) map[int64]struct{} {
@@ -743,7 +748,7 @@ func newestAssetIDs(
 	}
 	for _, group := range groups {
 		sort.Slice(group, func(left, right int) bool {
-			return group[left].UpdatedAt.After(group[right].UpdatedAt)
+			return rankedNewer(order, assetRank(repository, group[left]), assetRank(repository, group[right]))
 		})
 		limit := keepLast
 		if limit > len(group) {
@@ -754,6 +759,11 @@ func newestAssetIDs(
 		}
 	}
 	return retained
+}
+
+func assetRank(repository domain.Repository, asset domain.Asset) retentionRank {
+	version, hasVersion := retentionVersion(repository, asset)
+	return retentionRank{version: version, hasVersion: hasVersion, updatedAt: asset.UpdatedAt}
 }
 
 func cleanupSupportsAsset(asset domain.Asset) bool {

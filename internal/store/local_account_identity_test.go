@@ -66,13 +66,16 @@ func TestAccountIdentityMigrationBackfillsDistinctStableValues(t *testing.T) {
 		if _, err := metadata.CreateToken(ctx, username, "migration-token", apiSecret, []string{"repository:migration:read"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := metadata.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 14`); err != nil {
+		if _, err := metadata.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 14`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := metadata.db.ExecContext(ctx, `DROP INDEX idx_users_identity`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE users DROP COLUMN identity`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE cleanup_policies DROP COLUMN retention_order`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := metadata.db.ExecContext(ctx,

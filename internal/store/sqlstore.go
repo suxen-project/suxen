@@ -391,6 +391,14 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	if err := s.validateRepositoryMembers(ctx, transaction, repository); err != nil {
 		return err
 	}
+	// Raw component rules feed classification, so a change relabels assets.
+	// Take the relabel lock before any row lock: publications hold it shared
+	// while their asset inserts key-share lock this repository row.
+	if repository.Format == "raw" {
+		if err := lockClassificationRelabel(ctx, transaction); err != nil {
+			return err
+		}
+	}
 
 	var targetBlobStore string
 	var targetBlobStoreState string
@@ -410,7 +418,7 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 		}
 		return err
 	}
-	currentQuery := `SELECT id, blob_store, upstream, format, type, allow_overwrite FROM repositories WHERE name = ?`
+	currentQuery := `SELECT id, blob_store, upstream, format, type, allow_overwrite, format_config FROM repositories WHERE name = ?`
 	if s.dialect == dialectPostgres {
 		currentQuery += ` FOR UPDATE`
 	}
@@ -420,11 +428,12 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	var currentFormat string
 	var currentType string
 	var currentAllowOverwrite bool
+	var currentFormatConfig string
 	if err := transaction.QueryRowContext(
 		ctx,
 		currentQuery,
 		repository.Name,
-	).Scan(&currentID, &currentBlobStore, &currentUpstream, &currentFormat, &currentType, &currentAllowOverwrite); err != nil {
+	).Scan(&currentID, &currentBlobStore, &currentUpstream, &currentFormat, &currentType, &currentAllowOverwrite, &currentFormatConfig); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.ErrNotFound
 		}
@@ -519,6 +528,11 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	}
 	if err := replaceRepositoryMembersTx(ctx, transaction, repository); err != nil {
 		return err
+	}
+	if repository.Format == "raw" && formatConfig != currentFormatConfig {
+		if err := relabelRepositoryTx(ctx, transaction, repository.Name); err != nil {
+			return err
+		}
 	}
 	// The endpoint is immutable (checked above), so any remaining upstream
 	// difference is a credential rotation in the URL userinfo. Clear the
@@ -884,6 +898,20 @@ func (s *SQLStore) PutAssets(
 				return nil, err
 			}
 			classifications[asset.Repository] = config
+			if repository := repositories[asset.Repository]; repository.Format == "raw" {
+				// Raw component rules are classification inputs; read them under
+				// the relabel lock so a concurrent rule change cannot be missed.
+				var encoded string
+				if err := transaction.QueryRowContext(ctx,
+					`SELECT format_config FROM repositories WHERE id = ?`, repository.ID,
+				).Scan(&encoded); err != nil {
+					return nil, err
+				}
+				if repository.FormatConfig, err = decodeFormatConfig(encoded); err != nil {
+					return nil, err
+				}
+				repositories[asset.Repository] = repository
+			}
 		}
 		if err := s.putAssetTx(ctx, transaction, asset, now); err != nil {
 			return nil, err

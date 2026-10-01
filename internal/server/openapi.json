@@ -4283,7 +4283,9 @@
             "nullable": true,
             "items": {"$ref": "#/components/schemas/ProvisioningPredicate"}
           },
-          "keepLast": {"type": "integer", "minimum": 0, "description": "Number of newest matching assets or format-defined complete units to retain per component, ordered by update time. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Formats without retention units count individual asset rows."},
+          "keepLast": {"type": "integer", "minimum": 0, "description": "Number of newest matching assets or format-defined complete units to retain per component, ranked by order. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Raw repositories with formatConfig components group matched assets by component; a version captured as the parent directory forms one directory unit. Formats without retention units count individual asset rows."},
+
+          "order": {"type": "string", "enum": ["updatedAt", "version"], "default": "updatedAt", "description": "How keepLast ranks entries within a component. updatedAt keeps the most recently updated; version keeps the highest Raw component version or OCI tag, using semantic version precedence when both values parse as semver and natural (numeric-aware) order otherwise, with ties broken by update time. Entries without a version rank below versioned ones."},
           "action": {"type": "string", "enum": ["delete"]},
           "enabled": {"type": "boolean"}
         }
@@ -4883,7 +4885,7 @@
       "RepositoryFormatConfig": {
         "type": "object",
         "additionalProperties": true,
-        "description": "Format-owned repository settings validated by the owning format plugin (for example the Maven versionPolicy). Core formats accept no configuration."
+        "description": "Format-owned repository settings validated by the owning format plugin (for example the Maven versionPolicy). Raw hosted and proxy repositories accept components, an ordered list of {pattern, anchor} rules: pattern is an RE2 expression with named groups name and version, and anchor is an optional RE2 expression that a file must match to establish a version directory. The first matching pattern assigns raw.component and raw.version; unmatched paths keep directory grouping. OCI accepts no configuration."
       },
       "RepositoryEndpoints": {
         "type": "object",
@@ -6081,7 +6083,9 @@
             "validatedAt"
           ],
           "raw": [
-            "path"
+            "path",
+            "component",
+            "version"
           ],
           "oci": [
             "image",
@@ -6153,7 +6157,9 @@
             "items": {"$ref": "#/components/schemas/ResourceName"}
           },
           "criteria": {"$ref": "#/components/schemas/CriteriaRequest"},
-          "keepLast": {"type": "integer", "minimum": 0, "description": "Number of newest matching assets or format-defined complete units to retain per component, ordered by update time. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Formats without retention units count individual asset rows."},
+          "keepLast": {"type": "integer", "minimum": 0, "description": "Number of newest matching assets or format-defined complete units to retain per component, ranked by order. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Raw repositories with formatConfig components group matched assets by component; a version captured as the parent directory forms one directory unit. Formats without retention units count individual asset rows."},
+
+          "order": {"type": "string", "enum": ["updatedAt", "version"], "default": "updatedAt", "description": "How keepLast ranks entries within a component. updatedAt keeps the most recently updated; version keeps the highest Raw component version or OCI tag, using semantic version precedence when both values parse as semver and natural (numeric-aware) order otherwise, with ties broken by update time. Entries without a version rank below versioned ones."},
           "action": {"type": "string", "enum": ["delete"], "default": "delete"},
           "enabled": {"type": "boolean", "default": false}
         }
@@ -6169,7 +6175,9 @@
             "items": {"$ref": "#/components/schemas/ResourceName"}
           },
           "criteria": {"$ref": "#/components/schemas/CriteriaRequest"},
-          "keepLast": {"type": "integer", "minimum": 0, "description": "Number of newest matching assets or format-defined complete units to retain per component, ordered by update time. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Formats without retention units count individual asset rows."},
+          "keepLast": {"type": "integer", "minimum": 0, "description": "Number of newest matching assets or format-defined complete units to retain per component, ranked by order. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Raw repositories with formatConfig components group matched assets by component; a version captured as the parent directory forms one directory unit. Formats without retention units count individual asset rows."},
+
+          "order": {"type": "string", "enum": ["updatedAt", "version"], "default": "updatedAt", "description": "How keepLast ranks entries within a component. updatedAt keeps the most recently updated; version keeps the highest Raw component version or OCI tag, using semantic version precedence when both values parse as semver and natural (numeric-aware) order otherwise, with ties broken by update time. Entries without a version rank below versioned ones."},
           "action": {"type": "string", "enum": ["delete"], "default": "delete"},
           "enabled": {"type": "boolean", "default": false}
         }
@@ -6189,6 +6197,7 @@
           "name",
           "repositories",
           "criteria",
+          "order",
           "action",
           "enabled",
           "managed",
@@ -6210,7 +6219,15 @@
           "keepLast": {
             "type": "integer",
             "minimum": 0,
-            "description": "Number of newest matching assets or format-defined complete units to retain per component, ordered by update time. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Formats without retention units count individual asset rows."
+            "description": "Number of newest matching assets or format-defined complete units to retain per component, ranked by order. Go module versions form complete units: all .info, .mod, and .zip files must match the criteria, and incomplete versions are preserved. Maven retains whole base-version directories per groupId/artifactId, including classifiers and checksums; every file must match, and timestamped builds within one SNAPSHOT directory form one unit. Raw repositories with formatConfig components group matched assets by component; a version captured as the parent directory forms one directory unit. Formats without retention units count individual asset rows."
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "updatedAt",
+              "version"
+            ],
+            "description": "How keepLast ranks entries within a component; see CleanupPolicyCreateRequest.order."
           },
           "action": {
             "type": "string",

@@ -23,7 +23,27 @@ type retentionUnit struct {
 	key    string
 	group  string
 	newest time.Time
-	assets []domain.Asset
+	// version is the unit's ordering version, taken from the asset that
+	// established its group when the repository provides one.
+	version    string
+	hasVersion bool
+	assets     []domain.Asset
+}
+
+func (unit retentionUnit) rank() retentionRank {
+	return retentionRank{version: unit.version, hasVersion: unit.hasVersion, updatedAt: unit.newest}
+}
+
+// sortRetentionUnits orders one group's units from most to least retained,
+// breaking full ties by key so selection is deterministic.
+func sortRetentionUnits(order string, group []retentionUnit) {
+	sort.Slice(group, func(i, j int) bool {
+		left, right := group[i].rank(), group[j].rank()
+		if !rankedNewer(order, left, right) && !rankedNewer(order, right, left) {
+			return group[i].key > group[j].key
+		}
+		return rankedNewer(order, left, right)
+	})
 }
 
 func retentionUnitDirectory(formatName string) spiformat.RetentionUnitDirectory {
@@ -89,6 +109,9 @@ func selectRetentionDirectoryUnits(
 				if groupSet && unit.group != key {
 					complete = false
 				}
+				if !groupSet {
+					unit.version, unit.hasVersion = retentionVersion(repository, member)
+				}
 				unit.group = key
 				groupSet = true
 			}
@@ -102,12 +125,7 @@ func selectRetentionDirectoryUnits(
 	}
 	var selected []retentionUnit
 	for _, group := range groups {
-		sort.Slice(group, func(i, j int) bool {
-			if group[i].newest.Equal(group[j].newest) {
-				return group[i].key > group[j].key
-			}
-			return group[i].newest.After(group[j].newest)
-		})
+		sortRetentionUnits(policy.Order, group)
 		keep := policy.KeepLast
 		if keep < 0 {
 			keep = 0
@@ -170,6 +188,7 @@ func selectRetentionUnits(
 		}
 		seen[key] = struct{}{}
 		unit := retentionUnit{key: key, group: cleanupComponent(repository, grouping, asset)}
+		unit.version, unit.hasVersion = retentionVersion(repository, asset)
 		complete := true
 		for _, memberPath := range paths {
 			member, found := byPath[memberPath]
@@ -192,12 +211,7 @@ func selectRetentionUnits(
 	}
 	var selected [][]domain.Asset
 	for _, group := range groups {
-		sort.Slice(group, func(i, j int) bool {
-			if group[i].newest.Equal(group[j].newest) {
-				return group[i].key > group[j].key
-			}
-			return group[i].newest.After(group[j].newest)
-		})
+		sortRetentionUnits(policy.Order, group)
 		keep := policy.KeepLast
 		if keep < 0 {
 			keep = 0

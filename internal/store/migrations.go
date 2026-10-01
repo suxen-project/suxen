@@ -42,6 +42,7 @@ var schemaMigrations = []schemaMigration{
 	{version: 12, name: "proxy_cache_publication"},
 	{version: 13, name: "fixed_width_timestamps"},
 	{version: 14, name: "local_account_identity"},
+	{version: 15, name: "cleanup_policy_order"},
 }
 
 const createSchemaMigrationsTable = `

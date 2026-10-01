@@ -178,6 +178,9 @@ func TestTimestampMigrationPreservesValuesAndPredicatesOnBothDialects(t *testing
 		if _, err := store.db.ExecContext(ctx, `ALTER TABLE users DROP COLUMN identity`); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := store.db.ExecContext(ctx, `ALTER TABLE cleanup_policies DROP COLUMN retention_order`); err != nil {
+			t.Fatal(err)
+		}
 		for _, value := range []time.Time{base, base.Add(90 * time.Millisecond), base.Add(900 * time.Millisecond)} {
 			name := fmt.Sprintf("lease-%d", value.Nanosecond())
 			if _, err := store.db.ExecContext(ctx, `INSERT INTO leader_leases (name, holder, expires_at) VALUES (?, ?, ?)`, name, "old", value.Format(time.RFC3339Nano)); err != nil {

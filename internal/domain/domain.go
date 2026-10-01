@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/suxen-project/suxen/internal/jsonnumber"
+	"github.com/suxen-project/suxen/internal/rawcomponent"
 	spiblob "github.com/suxen-project/suxen/spi/blob"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 )
@@ -271,6 +272,9 @@ func OCIEndpointsOverlap(left *RepositoryEndpoints, right *RepositoryEndpoints) 
 // Formats without a validator hook accept no configuration, keeping
 // unvalidated settings out of the stored resource.
 func (r Repository) validateFormatConfig() error {
+	if r.Format == "raw" {
+		return r.validateRawFormatConfig()
+	}
 	registered, found := spiformat.Lookup(r.Format)
 	if !found {
 		if len(r.FormatConfig) != 0 {
@@ -292,6 +296,24 @@ func (r Repository) validateFormatConfig() error {
 		return nil
 	}
 	return validator.ValidateRepository(r.FormatView())
+}
+
+// validateRawFormatConfig accepts the core Raw component rules. A group stores
+// no assets of its own, so component rules would never apply to it.
+func (r Repository) validateRawFormatConfig() error {
+	if len(r.FormatConfig) == 0 {
+		return nil
+	}
+	if r.Type == "group" {
+		return &spiformat.PolicyViolation{
+			Code:    "invalid_format_config",
+			Message: "raw group repositories do not accept formatConfig",
+		}
+	}
+	if err := rawcomponent.Validate(r.FormatConfig); err != nil {
+		return &spiformat.PolicyViolation{Code: "invalid_format_config", Message: err.Error()}
+	}
+	return nil
 }
 
 // FormatView projects the asset onto the format SPI's read-only view.
@@ -773,12 +795,21 @@ type CleanupPolicy struct {
 	Repositories []string        `json:"repositories"`
 	Criteria     CleanupCriteria `json:"criteria"`
 	KeepLast     int             `json:"keepLast,omitempty"`
-	Action       string          `json:"action"`
-	Enabled      bool            `json:"enabled"`
-	Managed      bool            `json:"managed"`
-	CreatedAt    time.Time       `json:"createdAt"`
-	UpdatedAt    time.Time       `json:"updatedAt"`
+	// Order ranks keepLast candidates within a component: CleanupOrderUpdatedAt
+	// (newest update first) or CleanupOrderVersion (highest version first).
+	Order     string    `json:"order"`
+	Action    string    `json:"action"`
+	Enabled   bool      `json:"enabled"`
+	Managed   bool      `json:"managed"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
+
+// Cleanup policy orders. An empty order means CleanupOrderUpdatedAt.
+const (
+	CleanupOrderUpdatedAt = "updatedAt"
+	CleanupOrderVersion   = "version"
+)
 
 // Validate checks cleanup policy syntax without resolving repository references.
 func (policy CleanupPolicy) Validate() error {
@@ -796,6 +827,9 @@ func (policy CleanupPolicy) Validate() error {
 	}
 	if policy.Action != "" && policy.Action != "delete" {
 		return ErrInvalidCleanupAction
+	}
+	if policy.Order != "" && policy.Order != CleanupOrderUpdatedAt && policy.Order != CleanupOrderVersion {
+		return ErrInvalidCleanupOrder
 	}
 	for _, predicate := range policy.Criteria {
 		if err := predicate.Validate(); err != nil {

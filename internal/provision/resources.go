@@ -56,6 +56,7 @@ type cleanupPolicySpec struct {
 	Repositories []string               `json:"repositories"`
 	Criteria     domain.CleanupCriteria `json:"criteria"`
 	KeepLast     int                    `json:"keepLast"`
+	Order        string                 `json:"order"`
 	Action       string                 `json:"action"`
 	Enabled      bool                   `json:"enabled"`
 }
@@ -531,6 +532,9 @@ func (engine Engine) desiredCleanupPolicy(
 	desired.Name = resource.Name
 	if desired.Action == "" {
 		desired.Action = "delete"
+	}
+	if desired.Order == "" {
+		desired.Order = domain.CleanupOrderUpdatedAt
 	}
 	if desired.Repositories == nil {
 		desired.Repositories = []string{}
