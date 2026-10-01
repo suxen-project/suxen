@@ -912,7 +912,7 @@ func newestAssetIDs(
 
 func assetRank(repository domain.Repository, asset domain.Asset) retentionRank {
 	version, hasVersion := retentionVersion(repository, asset)
-	return retentionRank{version: version, hasVersion: hasVersion, updatedAt: asset.UpdatedAt}
+	return newRetentionRank(version, hasVersion, asset.UpdatedAt)
 }
 
 func cleanupSupportsAsset(asset domain.Asset) bool {

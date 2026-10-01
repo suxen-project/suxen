@@ -31,7 +31,7 @@ type retentionUnit struct {
 }
 
 func (unit retentionUnit) rank() retentionRank {
-	return retentionRank{version: unit.version, hasVersion: unit.hasVersion, updatedAt: unit.newest}
+	return newRetentionRank(unit.version, unit.hasVersion, unit.newest)
 }
 
 // sortRetentionUnits orders one group's units from most to least retained,
