@@ -147,6 +147,10 @@ type Store interface {
 	// direct children in directory to equal the supplied snapshot. It shares
 	// the publication lock so a new file cannot appear between check and commit.
 	DeleteAssetsInDirectoryIfUnchanged(context.Context, string, []domain.Asset) (bool, error)
+	// DeleteAssetSetsIfUnchanged generalizes the directory check: the stored
+	// rows of the sets together must equal the supplied snapshot, and the
+	// repository's format config must still equal the one the sets came from.
+	DeleteAssetSetsIfUnchanged(context.Context, map[string]any, []AssetSet, []domain.Asset) (bool, error)
 	// Assets returns assets whose paths begin with prefix.
 	Assets(context.Context, string, string) ([]domain.Asset, error)
 	// MaxAssetID fixes a high-water mark across repository discovery cursors.

@@ -96,6 +96,62 @@ remain updateable so a repository can accept new versions. Proxy cache refreshes
 unaffected. The setting does not revoke delete permission: a principal permitted to
 delete can remove an artifact before publishing its replacement.
 
+## Raw components
+
+Every Raw asset has a component and a version, exposed as the `raw.component` and
+`raw.version` attributes. By default the component is the file's parent directory
+(`/` at the repository root) and the version is its file name, so
+`dist/app-1.2.3.zip` is version `app-1.2.3.zip` of component `dist`, and each file is
+a version of its own. Cleanup therefore groups files by directory and deletes them
+one by one, and `order: version` ranks them by file name.
+
+To let classification and cleanup treat a payload and its side files as one version,
+declare ordered component patterns in `formatConfig.components`:
+
+```yaml
+formatConfig:
+  components:
+    - pattern: '^(?P<name>(models|tracks)/.+)/(?P<version>[0-9][^/]*)/.+$'
+      anchor: '\.(glb|zip)$'
+    - pattern: '^(?P<name>client/alpha)/[^/]+/trackmaniac-(?P<version>[^/-]+)-[^/]+$'
+      anchor: '\.zip$'
+```
+
+Each `pattern` is an RE2 expression with the named groups `name` and `version`; the
+optional `anchor` is an RE2 expression matched against the asset path. The first
+pattern that matches a path with a nonempty, non-overlapping name and version sets
+the asset's component and version. Paths that match no pattern keep the default. Their
+component may share a name with a pattern's component, as `models/blocksets/core`
+does for `models/blocksets/core/notes.txt`, but the two never share retention:
+`keepLast` counts the unmatched file only among the files of its directory.
+
+When the version capture is a whole path segment followed by more path, as `0.2.0`
+in `models/blocksets/core/0.2.0/core.glb`, that directory and everything below it is
+one version. Write the pattern's tail so it matches nested files too (`/.+$` rather
+than `/[^/]+$`): a file below a version directory that the pattern does not match
+belongs to another component, and cleanup then never deletes the directory, since
+that would remove the other file with it. When the version is part of a file name,
+every asset that the same pattern assigns the same component and version is one
+version, wherever it is stored. For example, the second pattern above makes the
+Linux and Windows zips of one build, and their `.sha256` files, one version of
+`client/alpha`. Likewise, when one component's version is stored in several version
+directories, or matched by several patterns, those parts form one version for
+retention: it takes one `keepLast` slot and cleanup deletes all of its parts or
+none.
+
+With an `anchor`, only a matching file can establish a version: a directory holding
+only `SHA256SUMS`, or checksums without their zip, is not a version, so it is neither
+listed nor deleted by a policy. Once one of its files matches the anchor, every file
+of the version belongs to it, including a checksum-only directory of the same
+version. A repository accepts at most 32 patterns; each
+`pattern` and `anchor` is at most 1024 bytes, and any other key is rejected with
+`invalid_format_config`.
+
+Changing the patterns reclassifies the repository's existing assets in the same
+transaction. Raw groups reject `formatConfig`. See
+[classification and cleanup](classification-cleanup.md#raw-component-retention) for
+retention examples.
+
 ## OCI registry roots
 
 Every OCI repository is reachable at `/repository/<name>/v2/` on the primary listen

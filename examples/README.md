@@ -43,7 +43,7 @@ A test skips cleanly when Docker (or a required upstream) is unavailable.
 
 | Example | What it shows | Client |
 | --- | --- | --- |
-| [`raw/`](raw/) | Hosted raw file store; authenticated write, development-profile anonymous read | curl |
+| [`raw/`](raw/) | Hosted raw file store; authenticated write, development-profile anonymous read; component versions with version-ordered cleanup | curl |
 | [`go/`](go/) | Go module proxy + hosted + group under one GOPROXY | go |
 | [`npm/`](npm/) | npm proxy + hosted + group; `npm publish` and cache npmjs.org | npm |
 | [`pypi/`](pypi/) | PyPI proxy + hosted + group; `twine upload` and cache pypi.org | twine, pip |

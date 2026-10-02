@@ -77,7 +77,8 @@ Apply the rules and create a cleanup policy from a JSON document:
 ./bin/suxenctl task leader
 ```
 
-A policy contains `name`, `repositories`, `criteria`, `keepLast`, `action`, and `enabled`.
+A policy contains `name`, `repositories`, `criteria`, `keepLast`, `order`, `action`,
+and `enabled`.
 Criteria are ordered `{path, op, value}` predicates over the projected attribute view;
 every predicate must match. Operators are `=`, `!=`, `<`, `<=`, `>`, `>=`, `before`,
 `after`, `matches`, `contains`, `in`, `not-in`, `exists`, and `absent`. Temporal values
@@ -96,7 +97,7 @@ decimal value: `1`, `1.0`, and `1e0` are equal, including when nested inside
 objects or arrays. The same rule applies to large exponents and to `!=`, `in`,
 `not-in`, `contains`, classification rules, download gates, and exact attribute search.
 `keepLast` is evaluated after predicate selection and retains the
-newest matching assets in each component. For Go module version files,
+first `keepLast` matching entries in each component, ranked by `order`. For Go module version files,
 `keepLast` counts complete `.info`/`.mod`/`.zip` versions per module. All three
 files must match the predicates before cleanup can delete that version;
 incomplete versions are left for explicit deletion. Other Go proxy paths such
@@ -110,6 +111,64 @@ match leaves the entire version alone. Timestamped SNAPSHOT builds in one
 (not only metadata, checksums, or signatures) to form a version unit. Standalone
 metadata uses ordinary retention within its own parent directory, including
 artifact-level indexes for artifact IDs ending in `-SNAPSHOT`.
+
+`order` decides which entries `keepLast` retains in each component. `updatedAt`, the
+default, keeps the most recently updated entries. `version` keeps the highest Raw
+component versions (file names, for Raw files that match no pattern) or OCI tags.
+Two versions that both parse as semantic versions, with or without a leading `v`,
+compare by semver precedence; otherwise they compare in
+natural order, so `build-10` follows `build-9`. Equal versions fall back to update
+time. With `version`, an entry without a version ranks below every versioned entry.
+Version ordering applies only to Raw component versions and OCI tags; Maven, Go, and
+other formats ignore it and rank by update time. An unknown `order` returns HTTP 400
+with `invalid_cleanup_order`.
+
+### Raw component retention
+
+Raw cleanup groups assets by [`raw.component`](repositories.md#raw-components). Each
+version is one unit, whether it is a single file, a version directory, or a set of
+files named with the version: every file in it must match the policy, `keepLast`
+counts versions, and cleanup deletes the whole version in one transaction. A
+version spread over several version directories or patterns is still one version:
+if any part cannot be deleted, cleanup keeps all of it. A file added or changed
+after selection, or a pattern change during the run, keeps the entire version.
+Files that match no pattern are retained per directory, separately from any pattern
+component of the same name. For example, with the `models` pattern and `.glb`
+anchor from the repositories guide, and these assets:
+
+```text
+models/blocksets/core/0.9.0/core.glb
+models/blocksets/core/0.9.0/SHA256SUMS
+models/blocksets/core/0.10.0/core.glb
+models/blocksets/core/0.10.0/SHA256SUMS
+models/blocksets/core/0.11.0/SHA256SUMS
+```
+
+a classification rule labels each payload and its checksums alike:
+
+```json
+{"rules": [{"when": [{"path": "raw.component", "op": "matches", "value": "^models/"}], "key": "kind", "value": "model"}]}
+```
+
+and this policy keeps only the highest complete model version:
+
+```json
+{
+  "name": "keep-latest-model",
+  "repositories": ["models"],
+  "criteria": [{"path": "classification.kind", "op": "=", "value": "model"}],
+  "keepLast": 1,
+  "order": "version",
+  "action": "delete",
+  "enabled": true
+}
+```
+
+Cleanup deletes both files of `0.9.0` and keeps `0.10.0`, even if `0.9.0` was uploaded
+later. `0.11.0` contains no anchor file, so it is not a version: it does not take the
+retained slot and cleanup leaves its checksum file alone. If the
+criteria matched only `core.glb`, no directory would be complete and nothing would be
+deleted.
 
 ## Scheduling and garbage collection
 

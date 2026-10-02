@@ -54,3 +54,45 @@ CURL="curlimages/curl:8.11.1"
 		if [ "$repo" = "files" ]; then [ "$output" = "replacement" ]; else [ "$output" = "original" ]; fi
 	done
 }
+
+@test "component listing groups a version directory with its side files" {
+	require_docker
+	printf 'model\n' >"$SUXEN_EXAMPLE_DATA/model.txt"
+	# 0.9.0 is uploaded last, so only version order keeps 0.10.0 in the next test.
+	for version in 0.10.0 0.9.0; do
+		for file in core.glb SHA256SUMS; do
+			run client "$CURL" -fsS -H "Authorization: Bearer $SUXEN_TOKEN" \
+				--upload-file /work/model.txt "$SUXEN_URL/repository/models/models/core/$version/$file"
+			[ "$status" -eq 0 ]
+		done
+	done
+	# Without a .glb anchor, a checksum-only directory is not a version.
+	run client "$CURL" -fsS -H "Authorization: Bearer $SUXEN_TOKEN" \
+		--upload-file /work/model.txt "$SUXEN_URL/repository/models/models/core/0.11.0/SHA256SUMS"
+	[ "$status" -eq 0 ]
+
+	run suxenctl repo components models
+	[ "$status" -eq 0 ]
+	[ "$(grep -o '"version":"[^"]*"' <<<"$output" | tr '\n' ' ')" = '"version":"0.10.0" "version":"0.9.0" ' ]
+	grep -q '"path":"models/core/0.10.0/SHA256SUMS"' <<<"$output"
+}
+
+@test "version-ordered cleanup deletes whole lower versions" {
+	require_docker
+	run suxenctl cleanup --apply models keep-latest-model
+	[ "$status" -eq 0 ]
+	for file in core.glb SHA256SUMS; do
+		run client "$CURL" -sS -o /dev/null -w '%{http_code}' "$SUXEN_URL/repository/models/models/core/0.9.0/$file"
+		[ "$output" = "404" ]
+		run client "$CURL" -sS -o /dev/null -w '%{http_code}' "$SUXEN_URL/repository/models/models/core/0.10.0/$file"
+		[ "$output" = "200" ]
+	done
+	run client "$CURL" -sS -o /dev/null -w '%{http_code}' "$SUXEN_URL/repository/models/models/core/0.11.0/SHA256SUMS"
+	[ "$output" = "200" ]
+}
+
+@test "a component pattern without a version group is rejected" {
+	run suxenctl repo create --component '^(?P<name>.+)$' bad-components
+	[ "$status" -ne 0 ]
+	[[ "$output" == *invalid_format_config* ]]
+}

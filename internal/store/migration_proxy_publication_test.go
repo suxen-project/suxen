@@ -43,6 +43,7 @@ func TestProxyPublicationMigrationPreservesPriorCacheOnBothDialects(t *testing.T
 		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE users DROP COLUMN identity`); err != nil {
 			t.Fatal(err)
 		}
+		dropRawComponentSchema(t, metadata)
 		if err := metadata.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}

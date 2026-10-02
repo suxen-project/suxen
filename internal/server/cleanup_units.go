@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/suxen-project/suxen/internal/domain"
+	"github.com/suxen-project/suxen/internal/retention"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 )
 
@@ -80,12 +81,12 @@ func selectRetentionDirectoryUnits(
 		for _, member := range members {
 			claimed[member.ID] = struct{}{}
 			if provider.RetentionUnitDirectory(repository.FormatView(), member.Path) != directory ||
-				!cleanupSupportsAsset(member) ||
+				!retention.Supports(member) ||
 				!assetMatchesCleanupCriteria(member, repository, policy.Criteria, now) {
 				complete = false
 			}
 			if !requiresAnchor || anchorProvider.IsRetentionUnitAnchor(repository.FormatView(), member.Path) {
-				key := cleanupComponent(repository, grouping, member)
+				key := retention.GroupKey(repository, grouping, member)
 				if groupSet && unit.group != key {
 					complete = false
 				}
@@ -169,14 +170,14 @@ func selectRetentionUnits(
 			continue
 		}
 		seen[key] = struct{}{}
-		unit := retentionUnit{key: key, group: cleanupComponent(repository, grouping, asset)}
+		unit := retentionUnit{key: key, group: retention.GroupKey(repository, grouping, asset)}
 		complete := true
 		for _, memberPath := range paths {
 			member, found := byPath[memberPath]
-			if !found || !cleanupSupportsAsset(member) ||
+			if !found || !retention.Supports(member) ||
 				!assetMatchesCleanupCriteria(member, repository, policy.Criteria, now) ||
 				!sameUnitPaths(provider.RetentionUnitPaths(repository.FormatView(), memberPath), paths) ||
-				cleanupComponent(repository, grouping, member) != unit.group {
+				retention.GroupKey(repository, grouping, member) != unit.group {
 				complete = false
 				break
 			}

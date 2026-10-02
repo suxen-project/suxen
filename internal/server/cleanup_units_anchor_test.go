@@ -39,7 +39,7 @@ func (legacyDirectoryOnly) RetentionUnitDirectory(_ spiformat.Repository, _ stri
 
 func TestAnchoredRetentionDirectoryRequiresConsistentArtifactsAndAllChildren(t *testing.T) {
 	provider := anchoredTestDirectory{}
-	repository := domain.Repository{Name: "pkg", Format: "raw"}
+	repository := domain.Repository{Name: "pkg", Format: "anchored-test"}
 	member := func(id int64, path string) domain.Asset {
 		return domain.Asset{ID: id, Path: path, Kind: "raw", UpdatedAt: time.Unix(id, 0)}
 	}

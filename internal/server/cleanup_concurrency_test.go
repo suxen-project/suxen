@@ -22,6 +22,24 @@ func (s *auditCleanupMutationStore) DeleteAssetWithCompanions(ctx context.Contex
 	return s.Store.DeleteAssetWithCompanions(ctx, artifact, companionPaths)
 }
 
+func (s *auditCleanupMutationStore) DeleteAssetsIfUnchanged(ctx context.Context, assets []domain.Asset) (bool, error) {
+	for _, asset := range assets {
+		if err := s.beforeDelete(ctx, asset); err != nil {
+			return false, err
+		}
+	}
+	return s.Store.DeleteAssetsIfUnchanged(ctx, assets)
+}
+
+func (s *auditCleanupMutationStore) DeleteAssetSetsIfUnchanged(ctx context.Context, formatConfig map[string]any, sets []store.AssetSet, assets []domain.Asset) (bool, error) {
+	for _, asset := range assets {
+		if err := s.beforeDelete(ctx, asset); err != nil {
+			return false, err
+		}
+	}
+	return s.Store.DeleteAssetSetsIfUnchanged(ctx, formatConfig, sets, assets)
+}
+
 func TestAuditCleanupRechecksPolicyAfterConcurrentMetadataChange(t *testing.T) {
 	t.Parallel()
 	for _, change := range []string{"download", "retention-attribute"} {

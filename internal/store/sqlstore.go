@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -18,6 +19,8 @@ import (
 	"github.com/suxen-project/suxen/internal/assetattrs"
 	"github.com/suxen-project/suxen/internal/domain"
 	"github.com/suxen-project/suxen/internal/ocimodel"
+	"github.com/suxen-project/suxen/internal/retention"
+	"github.com/suxen-project/suxen/internal/versionorder"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 	"golang.org/x/crypto/argon2"
 	_ "modernc.org/sqlite"
@@ -66,7 +69,9 @@ const assetColumns = `
     created_at,
     updated_at,
     validated_at,
-    last_accessed`
+    last_accessed,
+    component,
+    component_version`
 
 // assetColumnsForReturning lists the raw asset columns for a DELETE ... RETURNING,
 // where SQLite forbids the correlated subquery above. The repository name is set
@@ -87,7 +92,9 @@ const assetColumnsForReturning = `
     created_at,
     updated_at,
     validated_at,
-    last_accessed`
+    last_accessed,
+    component,
+    component_version`
 
 // SQLStore implements Store for SQLite files and, via embedding, PostgreSQL.
 type SQLStore struct {
@@ -285,8 +292,8 @@ func (s *SQLStore) insertRepositoryTx(ctx context.Context, transaction *dialectT
 	const query = `
         INSERT INTO repositories (
             id, name, format, type, blob_store, upstream, members, writable,
-            allow_overwrite, format_config, endpoints, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            allow_overwrite, format_config, endpoints, created_at, derived_revision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err = transaction.ExecContext(
 		ctx,
 		query,
@@ -302,6 +309,7 @@ func (s *SQLStore) insertRepositoryTx(ctx context.Context, transaction *dialectT
 		formatConfig,
 		endpoints,
 		formatTime(repository.CreatedAt),
+		derivedRevision(repository.Format),
 	)
 	if isUniqueConstraint(err) {
 		return domain.ErrConflict
@@ -391,6 +399,32 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	if err := s.validateRepositoryMembers(ctx, transaction, repository); err != nil {
 		return err
 	}
+	formatConfig, err := encodeFormatConfig(repository.FormatConfig)
+	if err != nil {
+		return err
+	}
+	// Format config feeds the derived asset columns (and, for Raw, the
+	// classification input), so a change rewrites asset rows and needs the
+	// exclusive relabel lock, taken before any row lock: publications hold it
+	// shared while their asset inserts key-share lock this repository row.
+	// Every caller holds the global repository-relations lock, which keeps the
+	// stored config from changing after this read, so other updates skip the
+	// lock.
+	var storedFormatConfig string
+	if err := transaction.QueryRowContext(ctx,
+		`SELECT format_config FROM repositories WHERE name = ?`, repository.Name,
+	).Scan(&storedFormatConfig); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	formatConfigChanged := formatConfig != storedFormatConfig
+	if formatConfigChanged {
+		if err := lockClassificationRelabel(ctx, transaction); err != nil {
+			return err
+		}
+	}
 
 	var targetBlobStore string
 	var targetBlobStoreState string
@@ -410,7 +444,7 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 		}
 		return err
 	}
-	currentQuery := `SELECT id, blob_store, upstream, format, type, allow_overwrite FROM repositories WHERE name = ?`
+	currentQuery := `SELECT id, blob_store, upstream, format, type, allow_overwrite, format_config FROM repositories WHERE name = ?`
 	if s.dialect == dialectPostgres {
 		currentQuery += ` FOR UPDATE`
 	}
@@ -420,11 +454,12 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	var currentFormat string
 	var currentType string
 	var currentAllowOverwrite bool
+	var currentFormatConfig string
 	if err := transaction.QueryRowContext(
 		ctx,
 		currentQuery,
 		repository.Name,
-	).Scan(&currentID, &currentBlobStore, &currentUpstream, &currentFormat, &currentType, &currentAllowOverwrite); err != nil {
+	).Scan(&currentID, &currentBlobStore, &currentUpstream, &currentFormat, &currentType, &currentAllowOverwrite, &currentFormatConfig); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.ErrNotFound
 		}
@@ -475,10 +510,6 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 			return domain.ErrRepositoryBlobStoreInUse
 		}
 	}
-	formatConfig, err := encodeFormatConfig(repository.FormatConfig)
-	if err != nil {
-		return err
-	}
 	endpoints, err := encodeRepositoryEndpoints(repository.Endpoints)
 	if err != nil {
 		return err
@@ -519,6 +550,11 @@ func (s *SQLStore) updateRepositoryTx(ctx context.Context, transaction *dialectT
 	}
 	if err := replaceRepositoryMembersTx(ctx, transaction, repository); err != nil {
 		return err
+	}
+	if formatConfigChanged {
+		if err := relabelRepositoryTx(ctx, transaction, repository.Name); err != nil {
+			return err
+		}
 	}
 	// The endpoint is immutable (checked above), so any remaining upstream
 	// difference is a credential rotation in the URL userinfo. Clear the
@@ -1008,12 +1044,23 @@ func (s *SQLStore) putAssetTx(
 	if err != nil {
 		return err
 	}
+	// The component columns derive from the format config read under this
+	// publication's lock, so a concurrent pattern change relabels after it.
+	derived := derivedAssetColumns(asset, domain.Repository{
+		Name: repositoryName, Format: repositoryFormat, Type: repositoryType, Upstream: repositoryUpstream,
+		AllowOverwrite: &allowOverwrite, FormatConfig: formatConfig,
+	})
 	const query = `
 		INSERT INTO assets (
 			repository_id, path, format_path, digest, size, blob_store, content_type, kind, reference,
-			subject_digest, attributes, created_at, updated_at, validated_at, last_accessed
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			subject_digest, attributes, created_at, updated_at, validated_at, last_accessed,
+			component, component_version, component_version_key, retention_group
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(repository_id, path) DO UPDATE SET
+			component = excluded.component,
+			component_version = excluded.component_version,
+			component_version_key = excluded.component_version_key,
+			retention_group = excluded.retention_group,
 			format_path = excluded.format_path,
 			digest = excluded.digest,
 			size = excluded.size,
@@ -1103,6 +1150,10 @@ func (s *SQLStore) putAssetTx(
 		formatTime(now),
 		formatTime(now),
 		formatTime(lastAccessed),
+		derived.component,
+		derived.version,
+		derived.versionKey,
+		derived.group,
 	)
 	if err != nil {
 		// A pinned identity that no longer exists (deleted mid-operation) fails
@@ -1328,14 +1379,69 @@ func (s *SQLStore) DeleteAssetsIfUnchanged(ctx context.Context, assets []domain.
 // The exclusive publication lock makes the directory scan complete on
 // PostgreSQL; SQLite's write transaction provides the same serialization.
 func (s *SQLStore) DeleteAssetsInDirectoryIfUnchanged(ctx context.Context, directory string, assets []domain.Asset) (bool, error) {
-	if len(assets) == 0 || !domain.ValidAssetPath(directory) {
+	if !domain.ValidAssetPath(directory) {
 		return false, nil
+	}
+	prefix := directory + "/"
+	return s.deleteAssetSetsIfUnchanged(ctx, nil, []AssetSet{{Prefix: prefix, Member: func(path string) bool {
+		return !strings.Contains(strings.TrimPrefix(path, prefix), "/")
+	}}}, assets)
+}
+
+// AssetSet names the stored rows a unit deletion must account for: the rows
+// under Prefix, or else the rows of one Component and Version, narrowed by
+// Member when it is set. Both forms read through an index.
+type AssetSet struct {
+	Prefix             string
+	Component, Version string
+	Member             func(path string) bool
+}
+
+func (set AssetSet) contains(asset domain.Asset) bool {
+	if set.Prefix != "" && !strings.HasPrefix(asset.Path, set.Prefix) {
+		return false
+	}
+	return set.Member == nil || set.Member(asset.Path)
+}
+
+// DeleteAssetSetsIfUnchanged deletes a unit atomically: the repository's
+// stored format config must still equal formatConfig, from which the caller
+// derived the sets, the stored rows of the sets together must equal the
+// supplied snapshot, every supplied asset must belong to a set, and every row
+// must be unchanged. It holds the exclusive publication lock, which format
+// config changes take too, so neither a new member nor a new config can
+// appear between check and commit.
+func (s *SQLStore) DeleteAssetSetsIfUnchanged(
+	ctx context.Context,
+	formatConfig map[string]any,
+	sets []AssetSet,
+	assets []domain.Asset,
+) (bool, error) {
+	wantConfig, err := encodeFormatConfig(formatConfig)
+	if err != nil {
+		return false, err
+	}
+	return s.deleteAssetSetsIfUnchanged(ctx, &wantConfig, sets, assets)
+}
+
+func (s *SQLStore) deleteAssetSetsIfUnchanged(
+	ctx context.Context,
+	wantConfig *string,
+	sets []AssetSet,
+	assets []domain.Asset,
+) (bool, error) {
+	if len(assets) == 0 || len(sets) == 0 {
+		return false, nil
+	}
+	for _, set := range sets {
+		if set.Prefix == "" && set.Component == "" {
+			return false, nil
+		}
 	}
 	repository := assets[0].Repository
 	want := make(map[string]int64, len(assets))
 	for _, asset := range assets {
-		if asset.Repository != repository || !strings.HasPrefix(asset.Path, directory+"/") ||
-			strings.Contains(strings.TrimPrefix(asset.Path, directory+"/"), "/") {
+		if asset.Repository != repository || !slices.ContainsFunc(sets, func(set AssetSet) bool { return set.contains(asset) }) {
 			return false, nil
 		}
 		want[asset.Path] = asset.ID
@@ -1353,38 +1459,32 @@ func (s *SQLStore) DeleteAssetsInDirectoryIfUnchanged(ctx context.Context, direc
 			return false, err
 		}
 	}
-	rows, err := tx.QueryContext(ctx,
-		`SELECT path, id FROM assets WHERE repository_id = (SELECT id FROM repositories WHERE name = ?) AND path LIKE ? ESCAPE '!'`,
-		repository, escapeLikePrefix(directory+"/")+"%")
-	if err != nil {
-		return false, err
-	}
-	seen := 0
-	complete := true
-	for rows.Next() {
-		var path string
-		var id int64
-		if err := rows.Scan(&path, &id); err != nil {
-			rows.Close()
+	if wantConfig != nil {
+		var stored string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT format_config FROM repositories WHERE name = ?`, repository,
+		).Scan(&stored); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return false, nil
+			}
 			return false, err
 		}
-		if !strings.HasPrefix(path, directory+"/") {
-			continue
+		decoded, err := decodeFormatConfig(stored)
+		if err != nil {
+			return false, err
 		}
-		if strings.Contains(strings.TrimPrefix(path, directory+"/"), "/") {
-			continue
-		}
-		seen++
-		if want[path] != id {
-			complete = false
+		if current, err := encodeFormatConfig(decoded); err != nil || current != *wantConfig {
+			return false, err
 		}
 	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return false, err
+	seen := make(map[string]struct{}, len(want))
+	for _, set := range sets {
+		complete, err := storedSetMatchesTx(ctx, tx, repository, set, want, seen)
+		if err != nil || !complete {
+			return false, err
+		}
 	}
-	if !complete || seen != len(want) {
+	if len(seen) != len(want) {
 		return false, nil
 	}
 	for _, asset := range assets {
@@ -1397,6 +1497,58 @@ func (s *SQLStore) DeleteAssetsInDirectoryIfUnchanged(ctx context.Context, direc
 		}
 	}
 	return true, tx.Commit()
+}
+
+// storedSetMatchesTx reports whether every stored row of set is in want with
+// the same ID, recording the paths it saw.
+func storedSetMatchesTx(
+	ctx context.Context,
+	tx *dialectTx,
+	repository string,
+	set AssetSet,
+	want map[string]int64,
+	seen map[string]struct{},
+) (bool, error) {
+	query := `SELECT path, id FROM assets WHERE repository_id = (SELECT id FROM repositories WHERE name = ?) AND `
+	arguments := []any{repository}
+	if set.Prefix != "" {
+		lower, upper := prefixRange(set.Prefix)
+		query += `path >= ? AND path < ?`
+		arguments = append(arguments, lower, upper)
+	} else {
+		query += `component = ? AND component_version_key = ? AND component_version = ?`
+		arguments = append(arguments, set.Component, versionorder.Key(set.Version), set.Version)
+	}
+	rows, err := tx.QueryContext(ctx, query, arguments...)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	complete := true
+	for rows.Next() {
+		var path string
+		var id int64
+		if err := rows.Scan(&path, &id); err != nil {
+			return false, err
+		}
+		if !set.contains(domain.Asset{Path: path}) {
+			continue
+		}
+		seen[path] = struct{}{}
+		if wanted, found := want[path]; !found || wanted != id {
+			complete = false
+		}
+	}
+	return complete, rows.Err()
+}
+
+// prefixRange bounds the paths below a directory prefix, which must end in
+// "/", as a half-open range that both dialects answer from the
+// (repository_id, path) index; LIKE prefixes use it on neither by default.
+// Paths compare bytewise and "0" follows "/", so the range holds exactly the
+// paths that start with prefix.
+func prefixRange(prefix string) (lower, upper string) {
+	return prefix, strings.TrimSuffix(prefix, "/") + "0"
 }
 
 func (s *SQLStore) DeleteAssetWithCompanions(
@@ -2632,6 +2784,8 @@ func scanAsset(source scanner) (domain.Asset, error) {
 		&updatedAt,
 		&validatedAt,
 		&lastAccessed,
+		&asset.Component,
+		&asset.ComponentVersion,
 	)
 	return finishAsset(asset, err, attributes, createdAt, updatedAt, validatedAt, lastAccessed)
 }
@@ -2665,6 +2819,8 @@ func scanAssetReturning(source scanner, repositoryName string) (domain.Asset, er
 		&updatedAt,
 		&validatedAt,
 		&lastAccessed,
+		&asset.Component,
+		&asset.ComponentVersion,
 	)
 	asset.Repository = repositoryName
 	return finishAsset(asset, err, attributes, createdAt, updatedAt, validatedAt, lastAccessed)
@@ -2685,6 +2841,7 @@ func finishAsset(
 	if err != nil {
 		return asset, err
 	}
+	asset.ComponentStored = true
 	if err := decodeJSONNumbers(attributes, &asset.Attributes); err != nil {
 		return asset, fmt.Errorf("decode asset attributes: %w", err)
 	}
@@ -2872,4 +3029,25 @@ func isRepositoryBlobStoreInUseError(err error) bool {
 		strings.ToLower(err.Error()),
 		"repository blob store in use",
 	)
+}
+
+// derivedColumns are the asset columns computed from the asset and its
+// repository's configuration rather than supplied by the writer.
+type derivedColumns struct {
+	component, version, versionKey, group string
+}
+
+// derivedAssetColumns computes the Raw component columns from the format path
+// and the retention group exactly as cleanup groups the asset.
+func derivedAssetColumns(asset domain.Asset, repository domain.Repository) derivedColumns {
+	formatAsset := asset
+	if formatAsset.FormatPath != "" {
+		formatAsset.Path = formatAsset.FormatPath
+	}
+	derived := derivedColumns{group: retention.StoredGroup(repository, asset)}
+	derived.component, derived.version = assetattrs.RawComponent(formatAsset, repository)
+	if derived.component != "" {
+		derived.versionKey = versionorder.Key(derived.version)
+	}
+	return derived
 }

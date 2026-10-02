@@ -71,9 +71,26 @@ suxenctl repo list
 suxenctl repo create [--format FORMAT] [--type hosted|proxy|group]
                      [--blob-store NAME] [--upstream URL]
                      [--members NAME,...] [--hosts HOST,...]
-                     [--ports PORT,...] [--allow-overwrite=true|false] NAME
+                     [--ports PORT,...] [--allow-overwrite=true|false]
+                     [--format-config JSON]
+                     [--component PATTERN [--component-anchor PATTERN]]... NAME
 suxenctl repo assets NAME [PREFIX]
+suxenctl repo components NAME
 suxenctl repo delete NAME
+```
+
+`--component` adds one Raw component pattern to `formatConfig.components`, in
+command-line order; `--component-anchor` sets the anchor of the preceding
+`--component`. It cannot be combined with components given in `--format-config`.
+`repo components` prints the component listing; for a hosted or proxy Raw
+repository it prints one entry per version with its member files:
+
+```sh
+./bin/suxenctl repo create \
+  --component '^(?P<name>models/.+)/(?P<version>[0-9][^/]*)/.+$' \
+  --component-anchor '\.glb$' \
+  models
+./bin/suxenctl repo components models
 ```
 
 `--allow-overwrite` controls replacement in hosted repositories. Omit it to use the
@@ -180,6 +197,9 @@ suxenctl trust-policy defaults delete
 
 Cleanup is a preview unless `--apply` is present. Download gates and cleanup policies
 use the shared typed predicate model documented in [the API guide](api.md).
+A cleanup policy FILE may set `"order": "version"` to keep the highest component
+versions or OCI tags; an omitted `order` means `updatedAt`. `cleanup-policy update`
+replaces the whole policy, so omitting `order` there resets it to `updatedAt`.
 
 ## Webhooks
 

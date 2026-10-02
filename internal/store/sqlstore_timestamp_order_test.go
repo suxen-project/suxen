@@ -211,6 +211,9 @@ func TestTimestampMigrationPreservesValuesAndPredicatesOnBothDialects(t *testing
 				t.Fatal(err)
 			}
 		}
+		// Asset writes above use the current columns; drop them only now so
+		// migration 15 runs against its pre-migration shape.
+		dropRawComponentSchema(t, store)
 		if err := store.Migrate(ctx); err != nil {
 			t.Fatal(err)
 		}

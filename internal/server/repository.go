@@ -11,6 +11,7 @@ import (
 	"github.com/suxen-project/suxen/internal/domain"
 	"github.com/suxen-project/suxen/internal/httpx"
 	"github.com/suxen-project/suxen/internal/rawpath"
+	"github.com/suxen-project/suxen/internal/retention"
 	spiformat "github.com/suxen-project/suxen/spi/format"
 )
 
@@ -293,7 +294,7 @@ func (s *Server) deleteRaw(
 	// Remove the artifact's declared companion metadata in the same transaction so
 	// an interactive delete cannot orphan a companion record and leak its blob the
 	// way policy cleanup already avoids. Fail closed on an invalid declaration.
-	companionPaths, ok := s.declaredCompanionPaths(repository, retentionGrouping(repository.Format), assetPath)
+	companionPaths, ok := s.declaredCompanionPaths(repository, retention.FormatGrouping(repository.Format), assetPath)
 	if !ok {
 		httpx.WriteProblem(w, http.StatusInternalServerError, "invalid_companion_paths",
 			"the repository format declared invalid companion paths for this asset")
