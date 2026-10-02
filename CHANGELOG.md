@@ -2,7 +2,7 @@
 
 All notable changes to Suxen are recorded here. Releases use Semantic Versioning.
 
-## Unreleased
+## 1.0.0-rc.2
 
 ### Features
 

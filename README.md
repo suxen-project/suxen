@@ -13,7 +13,7 @@ Repository — hence the reversed name. suxen is an independent project, not aff
 or endorsed by Sonatype; Nexus is a trademark of Sonatype.
 
 The compatibility surface remains prerelease until `v1.0.0` is published. The
-[changelog](CHANGELOG.md) summarizes the `v1.0.0-rc.1` candidate, and the
+[changelog](CHANGELOG.md) summarizes the `v1.0.0-rc.2` candidate, and the
 [compatibility policy](docs/reference/compatibility.md) identifies the intended stable
 contract.
 

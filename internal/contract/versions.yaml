@@ -16,16 +16,16 @@
 # baselines when v1.0.0 is published.
 surfaces:
   - id: blobstore-spi
-    version: 1.0.0-rc.1
+    version: 1.0.0-rc.2
     source: spi/blob
   - id: format-spi
-    version: 1.0.0-rc.1
+    version: 1.0.0-rc.2
     source: spi/format
   - id: plugin-api-spi
-    version: 1.0.0-rc.1
+    version: 1.0.0-rc.2
     source: spi/api
   - id: http-api
-    version: 1.0.0-rc.1
+    version: 1.0.0-rc.2
     path: /api/v1
   - id: webhook-api
-    version: 1.0.0-rc.1
+    version: 1.0.0-rc.2

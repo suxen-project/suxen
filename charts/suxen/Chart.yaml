@@ -2,8 +2,8 @@ apiVersion: v2
 name: suxen-chart
 description: Artifact repository for Raw, OCI, Maven, Go, Cargo, npm, PyPI, and Git
 type: application
-version: 1.0.0-rc.1
-appVersion: "1.0.0-rc.1"
+version: 1.0.0-rc.2
+appVersion: "1.0.0-rc.2"
 sources:
   - https://github.com/suxen-project/suxen
 maintainers:

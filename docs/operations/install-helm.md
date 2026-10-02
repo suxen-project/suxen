@@ -11,7 +11,7 @@ Install a published chart with an explicit immutable version:
 ```sh
 helm install suxen \
   oci://ghcr.io/suxen-project/suxen-chart \
-  --version 1.0.0-rc.1
+  --version 1.0.0-rc.2
 ```
 
 The chart uses the standard image matching its app version by default. Disable its UI

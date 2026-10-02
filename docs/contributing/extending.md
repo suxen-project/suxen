@@ -20,7 +20,7 @@ code:
 Each SPI is reported through
 [`internal/contract/versions.yaml`](../../internal/contract/versions.yaml)
 (`blobstore-spi`, `format-spi`, `plugin-api-spi`). During prerelease, these
-surfaces share `1.0.0-rc.1` and may still change. Stable SPI versioning begins
+surfaces share `1.0.0-rc.2` and may still change. Stable SPI versioning begins
 with `v1.0.0`. See the
 [compatibility policy](../reference/compatibility.md#contract-surface-versions).
 
@@ -425,8 +425,8 @@ compiles it. Match its tag to the server version whose SPI contract you target:
 docker run --rm \
     -v "$PWD/my-plugin:/work" \
     -v "$PWD/dist:/out" \
-    ghcr.io/suxen-project/suxen-sdk:1.0.0-rc.1 \
-    --plugin example.com/my/plugin=/work --version 1.0.0-rc.1-custom
+    ghcr.io/suxen-project/suxen-sdk:1.0.0-rc.2 \
+    --plugin example.com/my/plugin=/work --version 1.0.0-rc.2-custom
 ```
 
 Release CI builds the image for amd64 and arm64, scans it for high and critical

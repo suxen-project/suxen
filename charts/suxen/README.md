@@ -11,7 +11,7 @@ Install an immutable published version:
 ```sh
 helm install suxen \
   oci://ghcr.io/suxen-project/suxen-chart \
-  --version 1.0.0-rc.1 \
+  --version 1.0.0-rc.2 \
   --namespace suxen \
   --create-namespace
 ```
@@ -302,7 +302,7 @@ Upgrade chart and image together by pinning the new chart version:
 ```sh
 helm upgrade suxen \
   oci://ghcr.io/suxen-project/suxen-chart \
-  --version 1.0.0-rc.1 \
+  --version 1.0.0-rc.2 \
   --namespace suxen \
   --values production-values.yaml
 ```
