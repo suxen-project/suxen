@@ -921,7 +921,7 @@ func garbageCollectionCommand(api *client, arguments []string) error {
 
 func repositoryCommand(api *client, arguments []string) error {
 	if len(arguments) == 0 {
-		return errors.New("repo command requires list, create, assets, or delete")
+		return errors.New("repo command requires list, create, assets, components, or delete")
 	}
 
 	switch arguments[0] {
@@ -945,6 +945,11 @@ func repositoryCommand(api *client, arguments []string) error {
 			requestPath += "?" + encoded
 		}
 		return api.printCollection(requestPath, 0)
+	case "components":
+		if len(arguments) != 2 {
+			return errors.New("usage: suxenctl repo components NAME")
+		}
+		return api.printCollection("/api/v1/repositories/"+url.PathEscape(arguments[1])+"/components", 0)
 	case "delete":
 		if len(arguments) != 2 {
 			return errors.New("usage: suxenctl repo delete NAME")
@@ -964,6 +969,9 @@ func createRepository(api *client, arguments []string) error {
 	blobStore := flags.String("blob-store", "default", "named blob store")
 	formatConfig := flags.String("format-config", "", `format-owned settings as JSON (e.g. {"versionPolicy":"release"})`)
 	allowOverwrite := flags.Bool("allow-overwrite", false, "allow replacing hosted assets (omitted: format default)")
+	components := &rawComponentFlags{}
+	flags.Var(components, "component", "Raw component pattern with name and version groups (repeatable, in match order)")
+	flags.Var(rawComponentAnchorFlag{components}, "component-anchor", "anchor pattern for the preceding --component")
 	hosts := flags.String("hosts", "", "comma-separated OCI registry hostnames")
 	ports := flags.String("ports", "", "comma-separated extra OCI listen ports")
 	if err := flags.Parse(arguments); err != nil {
@@ -995,6 +1003,17 @@ func createRepository(api *client, arguments []string) error {
 		}
 		payload["formatConfig"] = parsed
 	}
+	if len(components.rules) > 0 {
+		config, _ := payload["formatConfig"].(map[string]any)
+		if config == nil {
+			config = map[string]any{}
+		}
+		if _, present := config["components"]; present {
+			return errors.New("--component cannot be combined with components in --format-config")
+		}
+		config["components"] = components.rules
+		payload["formatConfig"] = config
+	}
 	if *hosts != "" || *ports != "" {
 		endpoints := map[string]any{}
 		if *hosts != "" {
@@ -1014,6 +1033,38 @@ func createRepository(api *client, arguments []string) error {
 		payload["endpoints"] = endpoints
 	}
 	return api.printJSON(http.MethodPost, "/api/v1/repositories", payload)
+}
+
+// rawComponentFlags collects --component values in command-line order, so the
+// first pattern given is the first one matched.
+type rawComponentFlags struct {
+	rules []map[string]any
+}
+
+func (components *rawComponentFlags) String() string { return "" }
+
+func (components *rawComponentFlags) Set(pattern string) error {
+	components.rules = append(components.rules, map[string]any{"pattern": pattern})
+	return nil
+}
+
+// rawComponentAnchorFlag attaches --component-anchor to the preceding pattern.
+type rawComponentAnchorFlag struct {
+	components *rawComponentFlags
+}
+
+func (rawComponentAnchorFlag) String() string { return "" }
+
+func (anchor rawComponentAnchorFlag) Set(value string) error {
+	rules := anchor.components.rules
+	if len(rules) == 0 {
+		return errors.New("--component-anchor must follow a --component")
+	}
+	if _, present := rules[len(rules)-1]["anchor"]; present {
+		return errors.New("each --component accepts one --component-anchor")
+	}
+	rules[len(rules)-1]["anchor"] = value
+	return nil
 }
 
 func rawCommand(api *client, arguments []string) error {
@@ -1457,8 +1508,10 @@ Commands:
   repo list
   repo create [--format FORMAT] [--type hosted|proxy|group]
               [--blob-store NAME] [--upstream URL] [--members NAME,...]
-              [--hosts HOST,...] [--ports PORT,...] NAME
+              [--hosts HOST,...] [--ports PORT,...] [--format-config JSON]
+              [--component PATTERN [--component-anchor PATTERN]]... NAME
   repo assets NAME [PREFIX]
+  repo components NAME
   repo delete NAME
   attribute get REPOSITORY ASSET_ID NAMESPACE
   attribute set --if-match DIGEST REPOSITORY ASSET_ID NAMESPACE FILE

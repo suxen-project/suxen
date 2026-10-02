@@ -213,6 +213,12 @@ func WriteIDCollectionPage[T any](
 	WriteJSON(w, http.StatusOK, page)
 }
 
+// DecodeCursor parses a cursor written by EncodeCursor into destination,
+// rejecting non-canonical encodings and unknown fields.
+func DecodeCursor(encoded string, destination any) error {
+	return decodeOpaqueCursor(encoded, destination)
+}
+
 func decodeOpaqueCursor(encoded string, destination any) error {
 	if len(encoded) == 0 || len(encoded) > MaximumCursorLength {
 		return errors.New("cursor length is invalid")

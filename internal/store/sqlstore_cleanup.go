@@ -11,6 +11,7 @@ import (
 	"github.com/suxen-project/suxen/internal/assetattrs"
 	"github.com/suxen-project/suxen/internal/domain"
 	"github.com/suxen-project/suxen/internal/predicate"
+	spiformat "github.com/suxen-project/suxen/spi/format"
 )
 
 const cleanupPolicyColumns = `
@@ -18,6 +19,7 @@ const cleanupPolicyColumns = `
 	repositories,
 	criteria,
 	keep_last,
+	retention_order,
 	action,
 	enabled,
 	created_at,
@@ -527,6 +529,30 @@ func relabelRepositoryTargets(
 	return total, nil
 }
 
+// relabelRepositoryTx refreshes a repository's derived asset columns
+// (component, version, and retention group) and reapplies its effective rules
+// after a change to the repository fields that they and classification
+// predicates project. The caller holds the relabel lock.
+func relabelRepositoryTx(ctx context.Context, transaction *dialectTx, repositoryName string) error {
+	repository, err := repositoryFrom(ctx, transaction, repositoryName)
+	if err != nil {
+		return err
+	}
+	if err := refreshDerivedColumnsTx(ctx, transaction, repository); err != nil {
+		return err
+	}
+	config, err := classificationFrom(ctx, transaction, repositoryName)
+	if err != nil {
+		return err
+	}
+	effective, err := effectiveClassificationFrom(ctx, transaction, config)
+	if err != nil || len(effective.Rules) == 0 {
+		return err
+	}
+	_, err = relabelRepositoryAssets(ctx, transaction, repository, effective.Rules, time.Now().UTC())
+	return err
+}
+
 // relabelRepositoryAssets rewrites classification.* on every asset of one
 // repository from the given effective rules, within the transaction.
 func relabelRepositoryAssets(
@@ -706,9 +732,9 @@ func insertCleanupPolicyRow(
 ) error {
 	const query = `
 		INSERT INTO cleanup_policies (
-			name, repositories, criteria, keep_last, action, enabled,
-			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			name, repositories, criteria, keep_last, retention_order, action,
+			enabled, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	_, err := executor.ExecContext(
 		ctx,
 		query,
@@ -716,6 +742,7 @@ func insertCleanupPolicyRow(
 		repositories,
 		criteria,
 		policy.KeepLast,
+		policy.Order,
 		policy.Action,
 		policy.Enabled,
 		formatTime(policy.CreatedAt),
@@ -736,8 +763,8 @@ func updateCleanupPolicyRow(
 ) error {
 	const query = `
 		UPDATE cleanup_policies
-		SET repositories = ?, criteria = ?, keep_last = ?, action = ?,
-			enabled = ?, updated_at = ?
+		SET repositories = ?, criteria = ?, keep_last = ?, retention_order = ?,
+			action = ?, enabled = ?, updated_at = ?
 		WHERE name = ?`
 	result, err := executor.ExecContext(
 		ctx,
@@ -745,6 +772,7 @@ func updateCleanupPolicyRow(
 		repositories,
 		criteria,
 		policy.KeepLast,
+		policy.Order,
 		policy.Action,
 		policy.Enabled,
 		formatTime(time.Now().UTC()),
@@ -807,6 +835,7 @@ func scanCleanupPolicy(source scanner) (domain.CleanupPolicy, error) {
 		&repositories,
 		&criteria,
 		&policy.KeepLast,
+		&policy.Order,
 		&policy.Action,
 		&policy.Enabled,
 		&createdAt,
@@ -835,6 +864,9 @@ func scanCleanupPolicy(source scanner) (domain.CleanupPolicy, error) {
 func normalizeCleanupPolicy(policy *domain.CleanupPolicy) {
 	if policy.Action == "" {
 		policy.Action = "delete"
+	}
+	if policy.Order == "" {
+		policy.Order = domain.CleanupOrderUpdatedAt
 	}
 	now := time.Now().UTC()
 	if policy.CreatedAt.IsZero() {
@@ -1125,4 +1157,135 @@ func parseOptionalTime(value sql.NullString) (*time.Time, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+// derivedColumnsRevision versions how the host computes the derived asset
+// columns. Bump it whenever an already stored asset's component, version,
+// version key, or retention group would change, so Migrate recomputes them.
+const derivedColumnsRevision = "1"
+
+// derivedRevision is the revision a repository's derived columns must carry:
+// the host's, plus the format plugin's grouping revision when it declares one.
+func derivedRevision(format string) string {
+	registered, found := spiformat.Lookup(format)
+	if !found {
+		return derivedColumnsRevision
+	}
+	if versioned, ok := registered.(spiformat.RetentionGroupingRevision); ok {
+		return derivedColumnsRevision + "/" + versioned.RetentionGroupingRevision()
+	}
+	return derivedColumnsRevision
+}
+
+// refreshDerivedColumnsTx recomputes the derived columns of one repository's
+// assets and records the revision they were computed with.
+func refreshDerivedColumnsTx(ctx context.Context, transaction *dialectTx, repository domain.Repository) error {
+	query := `SELECT id, path, format_path, digest, size, content_type, kind, reference,
+		updated_at, validated_at, component, component_version, component_version_key, retention_group
+		FROM assets WHERE repository_id = ? ORDER BY id`
+	if transaction.dialect == dialectPostgres {
+		query += ` FOR UPDATE`
+	}
+	rows, err := transaction.QueryContext(ctx, query, repository.ID)
+	if err != nil {
+		return err
+	}
+	type change struct {
+		id      int64
+		derived derivedColumns
+	}
+	var changes []change
+	for rows.Next() {
+		asset := domain.Asset{Repository: repository.Name}
+		var updatedAt string
+		var validatedAt sql.NullString
+		var stored derivedColumns
+		if err := rows.Scan(&asset.ID, &asset.Path, &asset.FormatPath, &asset.Digest, &asset.Size,
+			&asset.ContentType, &asset.Kind, &asset.Reference, &updatedAt, &validatedAt,
+			&stored.component, &stored.version, &stored.versionKey, &stored.group); err != nil {
+			rows.Close()
+			return err
+		}
+		if asset.UpdatedAt, err = parseTime(updatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		asset.ValidatedAt = asset.UpdatedAt
+		if validatedAt.Valid {
+			if asset.ValidatedAt, err = parseTime(validatedAt.String); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		if want := derivedAssetColumns(asset, repository); want != stored {
+			changes = append(changes, change{id: asset.ID, derived: want})
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, update := range changes {
+		if _, err := transaction.ExecContext(ctx,
+			`UPDATE assets SET component = ?, component_version = ?, component_version_key = ?, retention_group = ? WHERE id = ?`,
+			update.derived.component, update.derived.version, update.derived.versionKey, update.derived.group, update.id,
+		); err != nil {
+			return err
+		}
+	}
+	_, err = transaction.ExecContext(ctx,
+		`UPDATE repositories SET derived_revision = ? WHERE id = ?`, derivedRevision(repository.Format), repository.ID)
+	return err
+}
+
+// reconcileDerivedColumns recomputes the derived columns of every repository
+// whose stored revision differs from the running one: after the migration
+// that added them, and after an upgrade that changes how the host or a format
+// plugin groups assets. Raw patterns are RE2 expressions and retention groups
+// may come from plugins, neither of which SQL can evaluate, so it runs in Go.
+func reconcileDerivedColumns(ctx context.Context, transaction *dialectTx) error {
+	rows, err := transaction.QueryContext(ctx,
+		`SELECT name, format, derived_revision FROM repositories ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	var stale []string
+	for rows.Next() {
+		var name, format, revision string
+		if err := rows.Scan(&name, &format, &revision); err != nil {
+			rows.Close()
+			return err
+		}
+		if revision != derivedRevision(format) {
+			stale = append(stale, name)
+		}
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(stale) == 0 {
+		return err
+	}
+	// Publications derive the columns under the shared lock; exclude them
+	// while rows are rewritten.
+	if err := lockClassificationRelabel(ctx, transaction); err != nil {
+		return err
+	}
+	// Raw attributes come from the recomputed columns, which classification
+	// rules may match, so Raw repositories relabel as a format config change
+	// does. Other formats' attributes are unchanged.
+	for _, name := range stale {
+		repository, err := repositoryFrom(ctx, transaction, name)
+		if err == nil {
+			if repository.Format == "raw" {
+				err = relabelRepositoryTx(ctx, transaction, name)
+			} else {
+				err = refreshDerivedColumnsTx(ctx, transaction, repository)
+			}
+		}
+		if err != nil {
+			return fmt.Errorf("recompute derived columns of repository %q: %w", name, err)
+		}
+	}
+	return nil
 }

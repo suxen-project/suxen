@@ -84,6 +84,7 @@ var domainProblemMappings = []problemMapping{
 	{domain.ErrCleanupRepositoriesRequired, http.StatusBadRequest, "cleanup_repositories_required"},
 	{domain.ErrCleanupCriteriaRequired, http.StatusBadRequest, "cleanup_criteria_required"},
 	{domain.ErrInvalidKeepLast, http.StatusBadRequest, "invalid_keep_last"},
+	{domain.ErrInvalidCleanupOrder, http.StatusBadRequest, "invalid_cleanup_order"},
 	{domain.ErrInvalidCleanupAction, http.StatusBadRequest, "invalid_cleanup_action"},
 	{domain.ErrInvalidPredicatePath, http.StatusBadRequest, "invalid_predicate_path"},
 	{domain.ErrInvalidPredicateOperator, http.StatusBadRequest, "invalid_predicate_operator"},

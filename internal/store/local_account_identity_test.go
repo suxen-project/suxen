@@ -66,7 +66,7 @@ func TestAccountIdentityMigrationBackfillsDistinctStableValues(t *testing.T) {
 		if _, err := metadata.CreateToken(ctx, username, "migration-token", apiSecret, []string{"repository:migration:read"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := metadata.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 14`); err != nil {
+		if _, err := metadata.db.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version >= 14`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := metadata.db.ExecContext(ctx, `DROP INDEX idx_users_identity`); err != nil {
@@ -75,6 +75,7 @@ func TestAccountIdentityMigrationBackfillsDistinctStableValues(t *testing.T) {
 		if _, err := metadata.db.ExecContext(ctx, `ALTER TABLE users DROP COLUMN identity`); err != nil {
 			t.Fatal(err)
 		}
+		dropRawComponentSchema(t, metadata)
 		if _, err := metadata.db.ExecContext(ctx,
 			`INSERT INTO users (username, password_hash, admin, created_at) VALUES (?, ?, ?, ?)`,
 			"migration-account-two", "legacy-hash", false, "2026-09-28T00:00:00.000000000Z"); err != nil {

@@ -12,3 +12,5 @@ examples/.bin/
 
 # opt-in, host-specific capacity results
 test/capacity/results/
+/suxenctl
+/suxen

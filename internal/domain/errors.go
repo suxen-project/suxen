@@ -68,6 +68,7 @@ var (
 	ErrCleanupRepositoriesRequired = errors.New("cleanup policy requires at least one repository")
 	ErrCleanupCriteriaRequired     = errors.New("cleanup policy requires at least one criterion")
 	ErrInvalidKeepLast             = errors.New("cleanup keepLast cannot be negative")
+	ErrInvalidCleanupOrder         = errors.New("cleanup order must be updatedAt or version")
 	ErrInvalidCleanupAction        = errors.New("cleanup action must be delete")
 	ErrInvalidPredicatePattern     = errors.New("matches predicate must contain a valid regular expression")
 	ErrInvalidPredicateDuration    = errors.New("predicate age criteria must be non-negative durations")

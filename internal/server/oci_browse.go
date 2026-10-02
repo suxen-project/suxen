@@ -29,6 +29,18 @@ type repositoryComponentVersion struct {
 	Size      int64     `json:"size"`
 	Kind      string    `json:"kind"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// Assets lists every member of a Raw component version; the row's asset
+	// fields then describe its first anchor file.
+	Assets []repositoryComponentAsset `json:"assets,omitempty"`
+}
+
+// repositoryComponentAsset is one member file of a Raw component version.
+type repositoryComponentAsset struct {
+	AssetID   int64     `json:"assetId"`
+	Path      string    `json:"path"`
+	Digest    string    `json:"digest"`
+	Size      int64     `json:"size"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 func (s *Server) handleRepositoryComponents(
@@ -43,6 +55,10 @@ func (s *Server) handleRepositoryComponents(
 	repository, err := s.repositoryReads().Repository(r.Context(), repositoryName)
 	if err != nil {
 		httpx.WriteResult(w, nil, err)
+		return
+	}
+	if repository.Format == "raw" && repository.Type != "group" {
+		s.writeRawComponents(w, r, repository)
 		return
 	}
 	sources, err := s.discoverySources(r.Context(), []domain.Repository{repository})

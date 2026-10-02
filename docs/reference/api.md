@@ -140,6 +140,18 @@ complete stored URL, including credentials and query parameters redacted by `GET
 An explicit upstream URL replaces URL credentials but must retain the existing
 endpoint (including its query). Do not send a redacted `GET` URL back unchanged.
 
+Raw hosted and proxy repositories accept `formatConfig.components`, the ordered
+component patterns described in
+[Raw components](../guides/repositories.md#raw-components). Invalid patterns return
+HTTP 400 with `invalid_format_config`. For a hosted or proxy Raw repository,
+`GET /api/v1/repositories/{name}/components` returns one row per component version,
+with every member file in `assets` across its version directories, using the same `limit` and `cursor` parameters and
+`repository:{name}:read` privilege as other repositories. There `limit` counts stored
+component versions, and versions without an anchor file are omitted, so a page can
+hold fewer rows than `limit`. Cleanup policies accept `order`
+(`updatedAt` or `version`); an omitted `order` is stored as `updatedAt`, including
+on `PUT`.
+
 User updates preserve omitted fields; an empty or omitted password leaves the
 existing password unchanged. Creating a user requires a nonempty password.
 Omitting `admin` preserves its current value within the update transaction, including
@@ -226,7 +238,10 @@ the traversal, and one component can span pages. It does not report `total` or
 accept numbered `page` requests. For OCI it lists manifests only; layer blobs
 are reached by opening a manifest. An empty page can still have `nextCursor`
 when the bounded scan skipped only blobs or shadowed group assets; follow it to
-finish traversal. `GET /api/v1/repositories/{name}/assets/{id}/manifest` reads
+finish traversal. For a hosted or proxy Raw repository, rows are ordered by
+component and then highest version first, and `limit` counts versions as described
+above.
+`GET /api/v1/repositories/{name}/assets/{id}/manifest` reads
 one OCI-manifest asset's config, layers, child manifests, and subject (with per-
 descriptor media types and sizes), parsed from the stored manifest body.
 For a group repository, the component row's `assetId` can be opened through

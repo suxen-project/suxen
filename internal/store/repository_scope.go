@@ -19,6 +19,20 @@ type RepositoryView interface {
 	Assets(context.Context, string) ([]domain.Asset, error)
 	AssetPaths(context.Context, string, string, int) ([]string, error)
 	AssetPage(context.Context, AssetPageRequest) (AssetPage, error)
+	// ComponentVersionPage pages distinct stored component versions after
+	// the given one (nil starts at the beginning) and returns every asset of
+	// the versions on the page.
+	ComponentVersionPage(context.Context, *ComponentVersion, int) (ComponentVersionPage, error)
+	// AssetCount counts the repository's asset rows.
+	AssetCount(context.Context) (int, error)
+	// RetentionGroupPage pages distinct stored retention groups after the
+	// given one; RetentionGroupAssets reads one group's rows.
+	RetentionGroupPage(context.Context, string, int) ([]string, bool, error)
+	RetentionGroupAssets(context.Context, string) ([]domain.Asset, error)
+	// DirectoryAssets reads a directory's direct children ("" is the root).
+	DirectoryAssets(context.Context, string) ([]domain.Asset, error)
+	// SubtreeAssets reads every asset below a directory.
+	SubtreeAssets(context.Context, string) ([]domain.Asset, error)
 	DeleteAsset(context.Context, string) (domain.Asset, error)
 	DeleteAssetWithCompanions(context.Context, string, []string) (domain.Asset, error)
 	DeleteAssetByIDWithCompanions(context.Context, int64, []string) (domain.Asset, error)
@@ -46,6 +60,12 @@ type repositoryBackend interface {
 	AssetsByRepositoryID(context.Context, string, string) ([]domain.Asset, error)
 	AssetPathsByRepositoryID(context.Context, string, string, string, int) ([]string, error)
 	AssetPageByRepositoryID(context.Context, string, AssetPageRequest) (AssetPage, error)
+	ComponentVersionPageByRepositoryID(context.Context, string, *ComponentVersion, int) (ComponentVersionPage, error)
+	AssetCountByRepositoryID(context.Context, string) (int, error)
+	RetentionGroupPageByRepositoryID(context.Context, string, string, int) ([]string, bool, error)
+	RetentionGroupAssetsByRepositoryID(context.Context, string, string) ([]domain.Asset, error)
+	DirectoryAssetsByRepositoryID(context.Context, string, string) ([]domain.Asset, error)
+	SubtreeAssetsByRepositoryID(context.Context, string, string) ([]domain.Asset, error)
 	DeleteAssetByRepositoryID(context.Context, string, string, string) (domain.Asset, error)
 	DeleteAssetWithCompanionsByRepositoryID(context.Context, string, string, string, []string) (domain.Asset, error)
 	DeleteAssetByIDWithCompanionsByRepositoryID(context.Context, string, string, int64, []string) (domain.Asset, error)
@@ -111,6 +131,30 @@ func (scope repositoryScope) AssetPaths(ctx context.Context, prefix, after strin
 
 func (scope repositoryScope) AssetPage(ctx context.Context, request AssetPageRequest) (AssetPage, error) {
 	return scope.metadata.AssetPageByRepositoryID(ctx, scope.repository.ID, request)
+}
+
+func (scope repositoryScope) ComponentVersionPage(ctx context.Context, after *ComponentVersion, limit int) (ComponentVersionPage, error) {
+	return scope.metadata.ComponentVersionPageByRepositoryID(ctx, scope.repository.ID, after, limit)
+}
+
+func (scope repositoryScope) AssetCount(ctx context.Context) (int, error) {
+	return scope.metadata.AssetCountByRepositoryID(ctx, scope.repository.ID)
+}
+
+func (scope repositoryScope) RetentionGroupPage(ctx context.Context, after string, limit int) ([]string, bool, error) {
+	return scope.metadata.RetentionGroupPageByRepositoryID(ctx, scope.repository.ID, after, limit)
+}
+
+func (scope repositoryScope) RetentionGroupAssets(ctx context.Context, group string) ([]domain.Asset, error) {
+	return scope.metadata.RetentionGroupAssetsByRepositoryID(ctx, scope.repository.ID, group)
+}
+
+func (scope repositoryScope) DirectoryAssets(ctx context.Context, directory string) ([]domain.Asset, error) {
+	return scope.metadata.DirectoryAssetsByRepositoryID(ctx, scope.repository.ID, directory)
+}
+
+func (scope repositoryScope) SubtreeAssets(ctx context.Context, directory string) ([]domain.Asset, error) {
+	return scope.metadata.SubtreeAssetsByRepositoryID(ctx, scope.repository.ID, directory)
 }
 
 func (scope repositoryScope) DeleteAsset(ctx context.Context, path string) (domain.Asset, error) {

@@ -42,6 +42,7 @@ var schemaMigrations = []schemaMigration{
 	{version: 12, name: "proxy_cache_publication"},
 	{version: 13, name: "fixed_width_timestamps"},
 	{version: 14, name: "local_account_identity"},
+	{version: 15, name: "raw_components"},
 }
 
 const createSchemaMigrationsTable = `
@@ -90,6 +91,20 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		return &SchemaError{Err: err}
 	}
 
+	pending := false
+	for _, migration := range schemaMigrations {
+		if _, exists := applied[migration.version]; !exists {
+			pending = true
+		}
+	}
+	// Migrations can rewrite asset rows, which publications insert while
+	// holding the relabel lock shared. Take it before any table lock so a
+	// publication never holds it while waiting on this transaction.
+	if pending {
+		if err := lockClassificationRelabel(ctx, transaction); err != nil {
+			return fmt.Errorf("acquire relabel lock: %w", err)
+		}
+	}
 	for _, migration := range schemaMigrations {
 		if _, exists := applied[migration.version]; exists {
 			continue
@@ -97,6 +112,10 @@ func (s *SQLStore) Migrate(ctx context.Context) error {
 		if err := s.applyMigration(ctx, transaction, migration); err != nil {
 			return err
 		}
+	}
+
+	if err := reconcileDerivedColumns(ctx, transaction); err != nil {
+		return fmt.Errorf("reconcile derived asset columns: %w", err)
 	}
 
 	if err := transaction.Commit(); err != nil {

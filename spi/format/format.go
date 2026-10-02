@@ -319,7 +319,10 @@ type RetentionGrouping interface {
 	// RetentionGroupKey returns the identity whose versions compete for
 	// keepLast — every release of one package shares a key. ok=false falls
 	// back to the host's default grouping for that asset; it does not force
-	// directory grouping onto assets the host groups specially.
+	// directory grouping onto assets the host groups specially. The host
+	// stores the key when the asset is written and recomputes it when the
+	// repository configuration changes, so it must depend only on the
+	// repository configuration and the asset's stored fields.
 	RetentionGroupKey(repository Repository, asset Asset) (key string, ok bool)
 
 	// CompanionPaths returns the repository-relative paths of the
@@ -331,6 +334,16 @@ type RetentionGrouping interface {
 	// event, and accounting; a declaration cannot make another artifact
 	// disappear. An empty result means no companions.
 	CompanionPaths(repository Repository, assetPath string) []string
+}
+
+// RetentionGroupingRevision optionally versions a format's RetentionGroupKey.
+// The host stores every asset's group key when the asset is written; when the
+// revision a format reports differs from the one the stored keys were
+// computed with, the host recomputes them at startup. A format must change
+// the revision whenever RetentionGroupKey would return a different key for an
+// asset that is already stored; otherwise those assets keep their old group.
+type RetentionGroupingRevision interface {
+	RetentionGroupingRevision() string
 }
 
 // RetentionUnitPaths optionally identifies the complete set of stored artifact

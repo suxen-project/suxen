@@ -600,7 +600,7 @@ func assertProvisioningContract(t *testing.T, document map[string]any) {
 		"role":           {"description", "privileges"},
 		"user":           {"admin", "password", "roles", "secret", "secretRef"},
 		"oidcProvider":   {"allowPasswordGrant", "clientId", "clientSecret", "defaultRoles", "groupRoles", "groupsClaim", "issuer", "scopes", "secret", "secretRef"},
-		"cleanupPolicy":  {"action", "criteria", "enabled", "keepLast", "repositories"},
+		"cleanupPolicy":  {"action", "criteria", "enabled", "keepLast", "order", "repositories"},
 		"classification": {"rules"},
 		"trustPolicy": {
 			"allowedIdentities", "certificateAuthorities", "deniedFingerprints",
@@ -1436,6 +1436,49 @@ func TestDiscoveryOpenAPIUsesBoundedCursorPages(t *testing.T) {
 		page := resolveReference(t, document, schema).(map[string]any)
 		if _, found := objectValue(t, page, "properties")["total"]; found {
 			t.Errorf("GET %s must not promise an unbounded total", path)
+		}
+	}
+}
+
+func TestCleanupPolicyOpenAPIDocumentsOrder(t *testing.T) {
+	document := decodeOpenAPITemplate(t)
+	schemas := objectValue(t, objectValue(t, document, "components"), "schemas")
+	want := []string{domain.CleanupOrderUpdatedAt, domain.CleanupOrderVersion}
+	for _, name := range []string{
+		"CleanupPolicy", "CleanupPolicyCreateRequest", "CleanupPolicyUpdateRequest", "ProvisioningCleanupPolicySpec",
+	} {
+		order := objectValue(t, objectValue(t, objectValue(t, schemas, name), "properties"), "order")
+		if got := stringSlice(t, order["enum"]); !slices.Equal(got, want) {
+			t.Errorf("%s.order enum = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestRawComponentVersionOpenAPIMatchesResponse(t *testing.T) {
+	document := decodeOpenAPITemplate(t)
+	schemas := objectValue(t, objectValue(t, document, "components"), "schemas")
+	version := objectValue(t, objectValue(t, schemas, "RepositoryComponentVersion"), "properties")
+	assets := objectValue(t, version, "assets")
+	if ref := stringValue(objectValue(t, assets, "items"), "$ref"); ref != "#/components/schemas/RepositoryComponentAsset" {
+		t.Fatalf("RepositoryComponentVersion.assets items = %q", ref)
+	}
+	encoded, err := json.Marshal(repositoryComponentAsset{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	properties := objectValue(t, objectValue(t, schemas, "RepositoryComponentAsset"), "properties")
+	for field := range fields {
+		if _, found := properties[field]; !found {
+			t.Errorf("RepositoryComponentAsset is missing %q", field)
+		}
+	}
+	for property := range properties {
+		if _, found := fields[property]; !found {
+			t.Errorf("RepositoryComponentAsset documents unknown %q", property)
 		}
 	}
 }

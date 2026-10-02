@@ -10,6 +10,7 @@ import (
 	"github.com/suxen-project/suxen/internal/content"
 	"github.com/suxen-project/suxen/internal/domain"
 	"github.com/suxen-project/suxen/internal/httpx"
+	"github.com/suxen-project/suxen/internal/retention"
 )
 
 func (s *Server) handleAssets(
@@ -267,7 +268,7 @@ func (s *Server) handleAssetItem(
 		// transaction so an interactive delete cannot orphan a companion record
 		// and leak its blob the way policy cleanup already avoids. Fail closed on
 		// an invalid declaration.
-		companionPaths, ok := s.declaredCompanionPaths(repository, retentionGrouping(repository.Format), asset.Path)
+		companionPaths, ok := s.declaredCompanionPaths(repository, retention.FormatGrouping(repository.Format), asset.Path)
 		if !ok {
 			httpx.WriteProblem(w, http.StatusInternalServerError, "invalid_companion_paths",
 				"the repository format declared invalid companion paths for this asset")

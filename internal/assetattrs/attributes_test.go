@@ -196,6 +196,19 @@ func TestKnownAttributePathsCoverProjection(t *testing.T) {
 			repository: domain.Repository{Name: "raw", Format: "raw", Type: "hosted", BlobStore: "default"},
 			roots:      []string{"sys", "raw"},
 		},
+		{
+			asset: domain.Asset{
+				Repository: "models", Path: "models/core/0.2.0/SHA256SUMS",
+				CreatedAt: now, UpdatedAt: now,
+			},
+			repository: domain.Repository{
+				Name: "models", Format: "raw", Type: "hosted", BlobStore: "default",
+				FormatConfig: map[string]any{"components": []any{
+					map[string]any{"pattern": `^(?P<name>.+)/(?P<version>[^/]+)/[^/]+$`},
+				}},
+			},
+			roots: []string{"sys", "raw"},
+		},
 	}
 	for _, tc := range cases {
 		projected := Project(tc.asset, tc.repository)

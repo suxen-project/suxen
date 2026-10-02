@@ -16,3 +16,30 @@ resources:
       format: raw
       type: hosted
       allowOverwrite: false
+
+  # Component patterns: each version directory under models/, with everything
+  # below it, is one version of its component, and only a .glb file establishes
+  # it, so a directory holding only checksums is not a version. Other Raw
+  # repositories default to one version per file, named by the file.
+  - kind: repository
+    name: models
+    spec:
+      format: raw
+      type: hosted
+      formatConfig:
+        components:
+          - pattern: '^(?P<name>models/.+)/(?P<version>[0-9][^/]*)/.+$'
+            anchor: '\.glb$'
+
+  # Keeps the highest complete version of each model component, whatever the
+  # upload order. Disabled, so it runs only when triggered.
+  - kind: cleanupPolicy
+    name: keep-latest-model
+    spec:
+      repositories: [models]
+      criteria:
+        - {path: "raw.component", op: "exists"}
+      keepLast: 1
+      order: version
+      action: delete
+      enabled: false
