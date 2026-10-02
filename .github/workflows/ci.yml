@@ -74,13 +74,13 @@ jobs:
           scripts/check-public-packages-test.sh
           scripts/check-release-tag-test.sh
           scripts/promote-release-images-test.sh
-          scripts/build-release-artifacts.sh 1.0.0-rc.1 dist
+          scripts/build-release-artifacts.sh 1.0.0-rc.2 dist
           execution_targets=native
           if [[ "${GITHUB_SERVER_URL}" == "https://github.com" ]]; then
             execution_targets=amd64,arm64
           fi
           SUXEN_RELEASE_EXECUTE_LINUX_TARGETS="${execution_targets}" \
-            scripts/check-release-artifacts.sh 1.0.0-rc.1 dist
+            scripts/check-release-artifacts.sh 1.0.0-rc.2 dist
 
   windows-filesystem:
     # Auxiliary Actions implementations may try to reserve a runner before

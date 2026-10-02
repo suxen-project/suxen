@@ -1,6 +1,6 @@
 .PHONY: all build build-server build-noui build-noplugins test test-ui test-ui-unit test-ui-browser test-noui test-race-storage test-browser test-interop test-examples check check-core check-race-partition check-example check-chart check-release-scripts print-contract-matrix clean
 
-VERSION ?= 1.0.0-rc.1
+VERSION ?= 1.0.0-rc.2
 LDFLAGS := -s -w -X github.com/suxen-project/suxen/internal/server.Version=$(VERSION)
 SUXENCTL_LDFLAGS := -s -w -X main.version=$(VERSION)
 # Plugins are compiled in by default and excluded per plugin with build tags:

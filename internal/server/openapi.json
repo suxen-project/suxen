@@ -78,7 +78,7 @@
                           "name": {"type": "string", "example": "v1"},
                           "path": {"type": "string", "example": "/api/v1"},
                           "openapi": {"type": "string", "example": "/api/openapi.json"},
-                          "version": {"type": "string", "description": "SemVer of this HTTP API surface, from the contract manifest.", "example": "1.0.0-rc.1"}
+                          "version": {"type": "string", "description": "SemVer of this HTTP API surface, from the contract manifest.", "example": "1.0.0-rc.2"}
                         }
                       }
                     },

@@ -4,7 +4,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-ARG VERSION=1.0.0-rc.1
+ARG VERSION=1.0.0-rc.2
 # The default image compiles every plugin in. Exclude plugins per build with
 # e.g. --build-arg SUXEN_BUILD_TAGS=suxen_no_gcs,suxen_no_maven,suxen_no_git,suxen_no_go,suxen_no_cargo,suxen_no_npm,suxen_no_pypi (add noui to
 # also drop the embedded UI).
@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 go build \
     ./cmd/suxen
 
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
-ARG VERSION=1.0.0-rc.1
+ARG VERSION=1.0.0-rc.2
 LABEL org.opencontainers.image.title="suxen" \
       org.opencontainers.image.description="Self-hosted artifact repository" \
       org.opencontainers.image.version="${VERSION}" \

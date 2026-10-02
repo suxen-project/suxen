@@ -42,8 +42,8 @@ rules below.
 
 ## Contract surface versions
 
-Several public surfaces carry their own SemVer. For `v1.0.0-rc.1`, all report
-`1.0.0-rc.1`; they may advance independently after the stable v1 boundary is
+Several public surfaces carry their own SemVer. For `v1.0.0-rc.2`, all report
+`1.0.0-rc.2`; they may advance independently after the stable v1 boundary is
 established. [`internal/contract/versions.yaml`](../../internal/contract/versions.yaml)
 is the source of truth; a running server also reports the matrix under
 `versions[].version` and the `contract` array of `GET /api/v1`.
